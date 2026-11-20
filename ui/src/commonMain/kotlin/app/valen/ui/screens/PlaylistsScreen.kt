@@ -1,6 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.screens
 
+import app.valen.ui.components.bleed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import app.valen.ui.components.FilterPill
+import app.valen.core.arrangeSongs
+import app.valen.core.ListOrder
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -346,7 +352,15 @@ private fun PlaylistDetail(
     // A new list arrives empty, ready for its first songs.
     val adding = remember(playlist.id) { SongFinder() }
 
-    val playable = playlist.tracks.filter { manager.canPlay(it) }
+    // How the songs are shown: found by name, sorted. The sort is kept for each list while Valen
+    // runs, and it is the order the list plays in; finding only narrows what is shown.
+    var order by rememberPageValue("playlist-order:${playlist.id}", ListOrder.Own)
+    var reversed by rememberPageValue("playlist-reversed:${playlist.id}", false)
+    var find by remember(playlist.id) { mutableStateOf("") }
+    val sorted = remember(playlist.tracks, order, reversed) { arrangeSongs(playlist.tracks, order, reversed) }
+    val shown = remember(sorted, find) { if (find.isBlank()) sorted else arrangeSongs(sorted.map { it.value }, ListOrder.Own, find = find).map { sorted[it.index] } }
+
+    val playable = sorted.map { it.value }.filter { manager.canPlay(it) }
     val source = playlist.source?.link()
 
     // Kept on this device: the shelf's state for this list, when the platform keeps songs at all.
@@ -651,7 +665,66 @@ private fun PlaylistDetail(
                 }
             }
 
-            itemsIndexed(playlist.tracks, key = { index, track -> "$index:${track.key}" }) { i, track ->
+            // Long enough to look through: a field to find a song by name, and the ways to sort.
+            if (playlist.tracks.size >= ToolsFrom) {
+                item(key = "tools") {
+                    PageRow {
+                        Column {
+                            SearchField(
+                                value = find,
+                                onValueChange = { find = it },
+                                placeholder = "Find in this playlist",
+                                onClear = { find = "" },
+                                modifier = Modifier.widthIn(max = 520.dp),
+                            )
+                            Spacer(Modifier.height(Space.step1))
+                            // Run off the page's edges when they do not fit, as the shelves do.
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(Space.step2),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .bleed(chrome.gutter)
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = chrome.gutter),
+                            ) {
+                                // The chosen order pressed again runs the other way.
+                                ListOrder.entries.forEach { way ->
+                                    val chosen = way == order
+                                    FilterPill(
+                                        label = way.label(chosen, reversed),
+                                        selected = chosen,
+                                        onClick = {
+                                            if (chosen) {
+                                                reversed = !reversed
+                                            } else {
+                                                order = way
+                                                reversed = false
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(Space.step2))
+                        }
+                    }
+                }
+                if (shown.isEmpty() && find.isNotBlank()) {
+                    item(key = "no-match") {
+                        PageRow {
+                            Text(
+                                text = "No song here matches “${find.trim()}”.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = ValenColors.Text2,
+                                modifier = Modifier.padding(vertical = Space.step4),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Keyed by each song's place in the list, so a new sort slides the rows to theirs.
+            itemsIndexed(shown, key = { _, entry -> "${entry.index}:${entry.value.key}" }) { i, entry ->
+                val track = entry.value
                 PageRow(Modifier.animateItem(placementSpec = Motion.QueueReorder)) {
                     if (manager.canPlay(track)) {
                         ResultRow(
@@ -904,6 +977,9 @@ private fun UnavailableRow(track: Track, onSignIn: () -> Unit) {
 }
 
 /** One row of a full-width list, clear of the side panel and inside the gutters. */
+/** A list this long gets the field to find a song in it, and the sorts. */
+private const val ToolsFrom = 10
+
 @Composable
 private fun PageRow(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     val chrome = LocalChrome.current

@@ -27,11 +27,14 @@ import androidx.compose.runtime.getValue
 import app.valen.core.RepeatMode
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.graphicsLayer
 import app.valen.ui.theme.LocalReducedMotion
 import app.valen.ui.theme.Motion
@@ -82,34 +85,29 @@ fun TransportBar(
             horizontalArrangement = Arrangement.spacedBy(gap, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-        IconTap(
+        SkipTap(
             icon = Icons.Rounded.SkipPrevious,
             label = "Previous",
             onClick = onPrevious,
+            forward = false,
             enabled = canSkipPrevious,
-            tint = ValenColors.Text,
             iconSize = skipSize,
             size = max(Layout.hitTarget, skipSize + 16.dp),
         )
         val target = max(Layout.hitTarget, playSize + 16.dp)
         if (isBuffering) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(target)) {
-                CircularProgressIndicator(
-                    color = ValenColors.Text,
-                    trackColor = ValenColors.Fill,
-                    strokeWidth = if (playSize >= 56.dp) 3.dp else 2.dp,
-                    modifier = Modifier.size(playSize * 0.62f),
-                )
+                LiquidWait(modifier = Modifier.size(playSize * 0.66f))
             }
         } else {
             PlayToggle(isPlaying = isPlaying, onToggle = onToggle, iconSize = playSize, size = target)
         }
-        IconTap(
+        SkipTap(
             icon = Icons.Rounded.SkipNext,
             label = "Next",
             onClick = onNext,
+            forward = true,
             enabled = canSkipNext,
-            tint = ValenColors.Text,
             iconSize = skipSize,
             size = max(Layout.hitTarget, skipSize + 16.dp),
         )
@@ -203,5 +201,63 @@ fun PlayToggle(
                     .graphicsLayer { rotationZ = turn.value },
             )
         }
+    }
+}
+
+/**
+ * Next and previous. A press kicks the glyph the way it leads — a few dp along its arrow, pushed
+ * a little narrow — and it springs back with the press's overshoot, so a skip feels like a shove
+ * rather than a switch. Pressed again quickly, the kick starts over from where it is.
+ */
+@Composable
+internal fun SkipTap(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    forward: Boolean,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tint: Color = ValenColors.Text,
+    iconSize: Dp = 26.dp,
+    size: Dp = Layout.hitTarget,
+) {
+    val reduced = LocalReducedMotion.current
+    val source = rememberInteraction()
+    val kick = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val way = if (forward) 1f else -1f
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(size)
+            .pressScale(source)
+            .tap(
+                onClick = {
+                    onClick()
+                    if (!reduced) {
+                        scope.launch {
+                            kick.animateTo(1f, tween(Motion.KickMs, easing = Motion.Exit))
+                            kick.animateTo(0f, Motion.squish())
+                        }
+                    }
+                },
+                shape = CircleShape,
+                enabled = enabled,
+                source = source,
+            ),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (enabled) tint else ValenColors.Text3,
+            modifier = Modifier
+                .size(iconSize)
+                .graphicsLayer {
+                    val k = kick.value
+                    translationX = way * k * Motion.KickDistance.toPx()
+                    scaleX = 1f - 0.1f * k
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (forward) 1f else 0f, 0.5f)
+                },
+        )
     }
 }

@@ -98,6 +98,15 @@ valen [--width N] [--height N] [--route home|search|playlists|import|now-playing
 | `VALEN_CAPTURE_RECAP_TURN=1` | `--screenshot` only: turn the story to its next page halfway (with `VALEN_CAPTURE_FRAMES`, to see the slap) |
 | `VALEN_CAPTURE_SETTINGS=PART` | `--screenshot --route settings`: open that part of Settings (`services`, `playback`, `look`, `week`, `downloads`, `discord`, `about`, `test`) |
 | `VALEN_CAPTURE_UPDATE=STATE` | `--screenshot` only: Settings → About shows that update state (`uptodate`, `checking`, `available`, `downloading`, `ready`, `installed`, `failed`, `told`, `off`) of an invented 9.9.9-beta.1, which also opens the update sheet over any route (`pour` runs a download in it, then Ready); GitHub is not asked. Unset, a screenshot has no updater |
+| `VALEN_CAPTURE_SKIP=next\|prev[,…]` | `--screenshot` only: move the queue on (or back) halfway, then once more every 1.5 s for each further step (`next,prev` slaps a poster on, then lifts it off) |
+| `VALEN_CAPTURE_ENQUEUE=1` | `--screenshot` only: add the playing song to the queue halfway (the poured notice, its drawn tick, the dock's queue glyph swallowing it) |
+| `VALEN_CAPTURE_PAUSE=1` | `--screenshot` only: pause the song halfway (the stage's and Home's lights going down) |
+| `VALEN_CAPTURE_POINTER=X,Y` | `--screenshot` only: rest a mouse pointer there from a third of the way in (hover states: a rail's ghost and its times, a cover's lean) |
+| `VALEN_CAPTURE_CLICK=X,Y` | `--screenshot` only: click there halfway (a search row's + at 1600×900: the drop flying into the dock) |
+| `VALEN_CAPTURE_DRAG=X,Y,X2,Y2` | `--screenshot` only: press at X,Y halfway, drag to X2,Y2 over a second, rest and let go at 1.6 s (a held queue row slapped back: its handle is at about 1537,211 at 1600×900; a pulled mini player: about 230,732 → 100,732 at 390×844) |
+| `VALEN_CAPTURE_KEYS=help[,stage,…]` | `--screenshot` only: do those keyboard shortcuts (`Shortcut` names: `help`, `stage`, `queue`, `search`, `shuffle`…) halfway, 1.2 s apart (`help` slaps the keys page up) |
+| `VALEN_CAPTURE_ALONE=1` | with `--play`: queue the song found by itself, not with the other results (a queue at its end: "Then, songs like these") |
+| `VALEN_CAPTURE_TRACE=1` | `--screenshot` only: print the stack of a render failure (a teardown failure is always named) |
 | `VALEN_CAPTURE_IDLE=1` | `--screenshot` only: after the settle, print how many of 20 more frames still ask to be redrawn (a redraw loop shows as 20 of 20) |
 | `VALEN_FFPLAY_BIN` | ffplay used for native playback |
 | `VALEN_CHROME_BIN` | Chrome/Chromium for Spotify |
@@ -261,6 +270,13 @@ Key invariants:
   added up. The day bars take the larger of the local day and the older UTC `days`. The Home and
   profile card shows by itself on Sunday and Monday (`recapDue`), or every day with Settings →
   Test (`AppSettings.recapAlways`); the story itself never opens on its own.
+- **Private mode stops the counting, not the player.** `AppSettings.privateMode` — the eye with a
+  line through it at the foot of the side panel, and Settings → Playback's first switch — gates
+  every write that records listening: the 250 ms tick does not `stats.count`, `next()` holds no
+  early skip, and `DiscordPresence` clears its card and rests at `Off` (its wait follows the whole
+  `AppSettings`, so the switch wakes it). The taste, the stats and "Your week" are made from that
+  log, so while it is on they freeze rather than reset; what was counted before the switch stays.
+  Playback, the queue, the saved session, playlists, search, downloads and MPRIS are untouched.
 - **On a phone the catalogue's pages are a page of the wall, not a sheet.** `PhoneApp` shows
   `Route.Artist` inside the `Wall` while it is in `nav.over`, so the mini player and the tab bar float
   over an artist, a release or a service's playlist as over any place (they used to be a
@@ -307,6 +323,30 @@ Key invariants:
   way), is matched by key, not by what the service shows now. A `Failed` for the song on show moves
   the music on after `FAILED_MOVE_ON_MS` (it used to stop and wait for a press); repeat-one never
   replays a failed song; five failures in a row (or the queue's length) stop there.
+- **A starting service's own last song is never put back on show.** `begin()` shows the new song
+  at once, but the 250 ms tick copies the active service's `player` state, and until the service
+  has the new song that state still names its previous one — or, when the queue moves to another
+  service, whatever that service played last, long ago. Copying it flipped the screen old → new →
+  old on one skip and through songs nobody asked for (seen in the owner's recording once the stage
+  poster and wash made every change loud). `begin()` notes that song (`staleKey`) and the tick skips
+  a state still showing it, until the service shows anything else or `STALE_SHOW_MS` passes
+  (`PlaybackCoordinatorTest`: "a service that has not moved yet…").
+- **The song shown is the song Valen asked for, while the service plays it.** The tick shows
+  `asked` (the queue's track handed to the service in `begin()`), not the service's own
+  description, whenever the service reports that song: the same id, or the same recording
+  (`recordingKey`) on the same service, as when Spotify swaps in a regional copy. Gaps (cover,
+  album, length) are filled from the service. The Web Player describes a song with another size of
+  cover, which made the stage's poster slap the same song on twice (once starting, once loaded);
+  it also kept a playing row unmarked when the page's id differed. A different song is shown as
+  the service reports it. Pinned by "the service's own description of the song asked for…".
+- **What keeps the music going is not the queue until it is played.** With `keepPlaying` on (the
+  default) and nothing repeating, `findMoreToKeepPlaying()` (from `prepareNext`, and when the
+  setting or repeat changes) looks for songs like the queue's last five once two or fewer are left;
+  they sit in `keepPlaying`, apart from `queue`, so an `enqueue` still goes before them. Only at the
+  end of the queue (`decideNext` → `keepGoing()`) do they join it, their keys in `offered`: their
+  listening counts as generated, and the saved session keeps that (`SavedSession.offered`). A new
+  queue (`play`, `clearQueue`, `clearData`) forgets both, a radio refills itself instead, and a
+  lent player (the recap) never keeps going. Pinned by "when the queue runs out, songs like it…".
 - **Between two songs there is always a song on show.** `begin()` shows the new song as starting
   instead of null: Android read null as "the session ended", stopped its playback service at every
   song change, and with the screen off could not start it again. `ValenRuntime` also ends the
@@ -748,6 +788,28 @@ These cost hours before; do not relearn them.
   never `performScrollTo()`.** The tests step the clock by hand; `performScrollTo` on a freshly
   opened page waited for idle forever (minutes of software rendering, then a killed build). Put
   `@Timeout` on a new test that drives many screens.
+- **No `AnimatedContent` (or other subcomposition) inside every row of a lazy list.** A
+  plus-to-tick `AnimatedContent` in `ResultRow` made Compose throw `LayoutNode N not found in
+  RectList` (its spatial index, `RectManager`) when the list's rows were taken down — on leaving
+  Search, and in 3 of 4 search captures; without it, 7 of 7 were clean. Animate one composable's
+  own properties instead (the row's + now pops on `Animatable`). `--screenshot` prints a failed
+  teardown as "tearing the window down failed" and `VALEN_CAPTURE_TRACE=1` prints the stack.
+  Not the same thing: a capture that sends pointer events on Search (`VALEN_CAPTURE_CLICK`, even
+  on empty space) trips that error too, and so did the untouched v1.0.0-alpha.10 (2 of 3 runs);
+  it is the offscreen scene's synthetic pointer, not a regression. Judge a click capture by its
+  frames.
+- **A new method on a service interface (`ArtistCatalog`, `PlaylistCatalog`, `MusicProvider`…)
+  is also passed on by the desktop's `RetryingProvider`**, which stands in for Spotify. A method
+  with a default answer compiles without it and quietly answers for the wrapper instead: Spotify's
+  albums and playlists in search were empty that way while YouTube Music's (not wrapped) showed.
+  Check it with a fake adapter that answers (`ProviderRecoveryTest`), not by reflection: Kotlin
+  gives the wrapper its own copy of every default, so a "declared" check passes either way.
+- **Every text field carries `Modifier.typing()`** (`ui/Keys.kt`). The desktop window's shortcuts
+  run on keys nothing inside took, and a text field takes only the character a key types, not
+  the key: without the mark, Space in a new field would pause the music as it typed a space. The
+  mark is also what lets a mouse press outside the field let go of it (`blurOnOutsideClick`).
+  Put it on the field's capsule when the capsule has buttons of its own (Search's clear), so a
+  press on them keeps the caret.
 - **Never open AWT's `FileDialog` (or anything else that runs `gtk_init`) inside Valen.** On this
   machine GTK 3's accessibility bridge aborts the JVM in `g_bus_get_sync` (SIGABRT under
   `atk_bridge_adaptor_init`), so the profile's "change picture" killed the app on every click.

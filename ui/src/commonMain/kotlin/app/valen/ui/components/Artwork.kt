@@ -51,6 +51,8 @@ fun Artwork(
     iconSize: Dp = 22.dp,
     animate: Boolean = true,
     measure: Boolean = false,
+    /** Called once the picture is there to be drawn (or will not come): a poster waits for it. */
+    onReady: (() -> Unit)? = null,
 ) {
     val context = LocalPlatformContext.current
     val reduced = LocalReducedMotion.current
@@ -82,6 +84,7 @@ fun Artwork(
         contentAlignment = Alignment.Center,
     ) {
         if (url.isNullOrBlank()) {
+            if (onReady != null) LaunchedEffect(Unit) { onReady() }
             Icon(
                 imageVector = Icons.Rounded.MusicNote,
                 contentDescription = contentDescription,
@@ -96,7 +99,11 @@ fun Artwork(
                 // A 640px cover drawn at 48dp is a 13x reduction; plain bilinear turns that to noise.
                 filterQuality = FilterQuality.Medium,
                 modifier = Modifier.matchParentSize(),
-                onSuccess = { success -> if (measure) decoded = success.result.image },
+                onSuccess = { success ->
+                    if (measure) decoded = success.result.image
+                    onReady?.invoke()
+                },
+                onError = { onReady?.invoke() },
             )
         }
     }

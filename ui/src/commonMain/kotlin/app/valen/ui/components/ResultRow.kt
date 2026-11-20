@@ -2,6 +2,10 @@
 package app.valen.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onPlaced
+import app.valen.ui.theme.LocalReducedMotion
+import app.valen.ui.theme.Motion
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -66,11 +71,20 @@ fun ResultRow(
     menu: MenuOrigin? = null,
 ) {
     val compact = LocalChrome.current.compact
+    val flights = LocalFlights.current
+    val reducedMotion = LocalReducedMotion.current
+    // Where the row is, for the drop that flies from its cover into the queue. Taken on the row
+    // itself (the item's root), as the song menu's right click does: a layout callback on the
+    // cover, nested inside a lazy list's item, upset Compose's own index of node rectangles and
+    // it threw when the page was left. The cover's place in the row is fixed (below).
+    val rowAt = androidx.compose.runtime.remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
             .height(Layout.rowHeight)
+            .onPlaced { rowAt[0] = it }
             .then(if (menu != null) Modifier.songMenuOnRightClick(track, menu) else Modifier)
             .tap(
                 onClick = onPlay,
@@ -80,7 +94,12 @@ fun ResultRow(
             )
             .padding(start = Space.step2),
     ) {
-        StatefulCover(url = track.artworkUrl, size = 48.dp, current = current, playing = playing)
+        StatefulCover(
+            url = track.artworkUrl,
+            size = CoverSize,
+            current = current,
+            playing = playing,
+        )
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -130,18 +149,51 @@ fun ResultRow(
                 modifier = Modifier.padding(horizontal = Space.step3),
             )
         }
+        // Once it is in, the plus turns into a tick: the new glyph pops in from small on the
+        // press's spring. One glyph that changes, not an AnimatedContent: a subcomposition in
+        // every row of a lazy list threw inside Compose ("LayoutNode not found in RectList")
+        // when the list's rows were taken down.
+        val pop = androidx.compose.runtime.remember { androidx.compose.animation.core.Animatable(1f) }
+        val seenQueued = androidx.compose.runtime.remember { booleanArrayOf(queued) }
+        androidx.compose.runtime.LaunchedEffect(queued) {
+            if (seenQueued[0] == queued) return@LaunchedEffect
+            seenQueued[0] = queued
+            if (!reducedMotion) {
+                pop.snapTo(0.4f)
+                pop.animateTo(1f, Motion.squish())
+            }
+        }
         IconTap(
             icon = if (queued) Icons.Rounded.Check else Icons.Rounded.Add,
             label = if (queued) "In the queue" else "Add to queue",
-            onClick = onEnqueue,
+            onClick = {
+                rowAt[0]?.takeIf { it.isAttached }?.let { row ->
+                    val at = row.positionInRoot()
+                    with(density) {
+                        val side = CoverSize.toPx()
+                        val left = at.x + Space.step2.toPx()
+                        val top = at.y + (row.size.height - side) / 2f
+                        flights.launch(androidx.compose.ui.geometry.Rect(left, top, left + side, top + side), track.artworkUrl, reducedMotion)
+                    }
+                }
+                onEnqueue()
+            },
             enabled = !queued,
-            modifier = Modifier.padding(end = if (menu != null) 0.dp else Space.step1),
+            modifier = Modifier
+                .padding(end = if (menu != null) 0.dp else Space.step1)
+                .graphicsLayer {
+                    scaleX = pop.value
+                    scaleY = pop.value
+                },
         )
         if (menu != null) {
             MoreButton(track = track, origin = menu, modifier = Modifier.padding(end = Space.step1))
         }
     }
 }
+
+/** A result row's cover. */
+private val CoverSize = 48.dp
 
 /** A row's cover; while its song is the current one, dimmed with the playing bars over it. */
 @Composable

@@ -6,6 +6,8 @@ import app.valen.core.LyricsCatalog
 import app.valen.core.LyricsQuery
 import app.valen.core.LyricsSkipped
 import app.valen.core.ArtistCatalog
+import app.valen.core.ServicePlaylist
+import app.valen.core.Release
 import app.valen.core.ArtistProfile
 import app.valen.core.AudioQuality
 import app.valen.core.ReleaseTracks
@@ -531,6 +533,12 @@ internal class RetryingProvider(
     override suspend fun artist(id: String): ArtistProfile = artists().artist(id)
 
     override suspend fun release(id: String): ReleaseTracks = artists().release(id)
+
+    // Every catalogue question is passed on, defaults included: one left to the interface's default
+    // answered "none" for Spotify while its adapter could answer (albums and playlists in search).
+    override suspend fun findReleases(query: String, limit: Int): List<Release> = artists().findReleases(query, limit)
+
+    override suspend fun findPlaylists(query: String, limit: Int): List<ServicePlaylist> = artists().findPlaylists(query, limit)
 
     /**
      * The service's own lyrics, from the adapter already attached and never from one built for

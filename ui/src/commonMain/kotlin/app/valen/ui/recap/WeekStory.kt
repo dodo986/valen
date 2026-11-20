@@ -450,7 +450,7 @@ private fun Poster(
                             forward -> fadeIn(tween(1)) togetherWith
                                 (scaleOut(Motion.pour(), targetScale = Motion.PouredOverScale) + fadeOut(Motion.pour(), targetAlpha = Motion.PouredOverAlpha))
                             // Back: the top page lifts away and the one before is there underneath.
-                            else -> (fadeIn(tween(1)) togetherWith (fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = 1.06f)))
+                            else -> (fadeIn(tween(1)) togetherWith (fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = Motion.LiftScale)))
                                 .apply { targetContentZIndex = -1f }
                         }
                     },
@@ -458,7 +458,7 @@ private fun Poster(
                     label = "storyPage",
                 ) { index ->
                     val slap by transition.animateFloat(
-                        transitionSpec = { tween(Motion.KineticMs + 80, easing = LinearEasing) },
+                        transitionSpec = { tween(Motion.SlapMs, easing = LinearEasing) },
                         label = "slap",
                     ) { if (it == EnterExitState.PreEnter) 0f else 1f }
                     // Paper, not a fade: the new page is solid almost at once, big and turned
@@ -471,7 +471,7 @@ private fun Poster(
                             .graphicsLayer {
                                 if (!slapping) return@graphicsLayer
                                 val p = Motion.Kinetic.transform(slap.coerceIn(0f, 1f))
-                                val s = 1.12f - 0.12f * p
+                                val s = Motion.SlapScale - (Motion.SlapScale - 1f) * p
                                 scaleX = s
                                 scaleY = s
                                 rotationZ = turn * (1f - p)

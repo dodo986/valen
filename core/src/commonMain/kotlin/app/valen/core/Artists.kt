@@ -97,6 +97,12 @@ interface ArtistCatalog {
 
     /** A release's songs here. */
     suspend fun release(id: String): ReleaseTracks
+
+    /** Albums, singles and EPs matching [query], best first; none where the service has no such search. */
+    suspend fun findReleases(query: String, limit: Int = 8): List<Release> = emptyList()
+
+    /** Playlists matching [query], best first; none where the service has no such search. */
+    suspend fun findPlaylists(query: String, limit: Int = 8): List<ServicePlaylist> = emptyList()
 }
 
 /** An artist as found across services: one name, every service's copy of them. */
@@ -197,6 +203,49 @@ class ArtistDirectory(
         return mergeArtists(found)
             .sortedWith(compareBy({ it.key != wanted }, { r -> r.copies.minOf { rank(it.provider) } }))
             .take(limit)
+    }
+
+    /**
+     * Albums, singles and EPs matching [query] on every service, each once: the same title by the
+     * same artist from two services is one release, opened from the preferred service. They keep
+     * the services' own order of relevance, the preferred service's best first, then the next's.
+     */
+    suspend fun searchReleases(query: String, limit: Int = 8): List<MergedRelease> {
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        val groups = LinkedHashMap<String, MutableList<Release>>()
+        for (r in interleaved(askAll { it.findReleases(q, limit) })) {
+            val by = artistsIn(r.artist).firstOrNull() ?: r.artist
+            groups.getOrPut(releaseKey(r.title) + "|" + artistKey(by)) { mutableListOf() } += r
+        }
+        return groups.values.map { group ->
+            val ordered = group.sortedBy { rank(it.provider) }
+            val lead = ordered.first()
+            MergedRelease(
+                title = lead.title,
+                artist = lead.artist,
+                kind = lead.kind,
+                year = group.mapNotNull { it.year }.minOrNull(),
+                artworkUrl = ordered.firstNotNullOfOrNull { it.artworkUrl },
+                copies = ordered.distinctBy { it.provider },
+            )
+        }.take(limit)
+    }
+
+    /** Playlists matching [query] on every service, in the same order as [searchReleases]. */
+    suspend fun searchPlaylists(query: String, limit: Int = 8): List<ServicePlaylist> {
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        return interleaved(askAll { it.findPlaylists(q, limit) })
+            .distinctBy { it.provider to it.id }
+            .take(limit)
+    }
+
+    /** Each service's first, in the person's order, then each one's second, and so on. */
+    private fun <T> interleaved(answers: Map<ProviderId, List<T>?>): List<T> {
+        val lists = answers.entries.sortedBy { rank(it.key) }.mapNotNull { it.value }
+        val longest = lists.maxOfOrNull { it.size } ?: 0
+        return (0 until longest).flatMap { i -> lists.mapNotNull { it.getOrNull(i) } }
     }
 
     /**

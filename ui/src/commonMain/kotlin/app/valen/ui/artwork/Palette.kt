@@ -238,3 +238,23 @@ object ArtworkPalette {
  * its colour: the wordmark's overspray and the marker under a page title. Neutral when nothing is.
  */
 val LocalPlayingTones = androidx.compose.runtime.compositionLocalOf { ArtworkPalette.Neutral }
+
+/**
+ * The tones for [url], held at the last known ones until the new cover has been measured (a
+ * moment after its picture arrives), so a song change goes from one cover's colour straight to
+ * the next and never dips through the default family on the way. Past [Motion.ToneWaitMs]
+ * without a measure it takes what there is.
+ */
+@androidx.compose.runtime.Composable
+fun rememberSettledTones(url: String?): ArtworkTones {
+    val now = ArtworkPalette.tones(url)
+    val known = url == null || !ArtworkPalette.followCover || ArtworkPalette.known(url)
+    var last by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(now) }
+    var waited by androidx.compose.runtime.remember(url) { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(url) {
+        kotlinx.coroutines.delay(app.valen.ui.theme.Motion.ToneWaitMs)
+        waited = true
+    }
+    if (known || waited) last = now
+    return last
+}

@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.host.desktop
 
+import app.valen.core.AppSettings
 import app.valen.core.PlaybackCoordinator
 import app.valen.core.PresenceCard
 import app.valen.core.PresenceLink
 import app.valen.core.PresenceNow
 import app.valen.core.PresencePause
-import app.valen.core.PresenceSettings
 import app.valen.core.PresenceStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -47,16 +47,19 @@ class DiscordPresence(
 
     private suspend fun run() {
         while (scope.isActive) {
-            val settings = coordinator.settings.value.presence
+            val all = coordinator.settings.value
+            val settings = all.presence
             val id = appId(envAppId)
             when {
-                !settings.enabled -> {
+                // Private mode keeps the listening off Discord too: the card is cleared and the
+                // link rests until it is off again.
+                all.privateMode || !settings.enabled -> {
                     _status.value = PresenceStatus.Off
-                    awaitChange(settings, Long.MAX_VALUE)
+                    awaitChange(all, Long.MAX_VALUE)
                 }
                 !id.all { it.isDigit() } -> {
                     _status.value = PresenceStatus.NeedsAppId
-                    awaitChange(settings, Long.MAX_VALUE)
+                    awaitChange(all, Long.MAX_VALUE)
                 }
                 else -> {
                     _status.value = PresenceStatus.Connecting
@@ -64,12 +67,12 @@ class DiscordPresence(
                         DiscordIpc.open(id)
                     } catch (e: DiscordIpc.Refused) {
                         _status.value = PresenceStatus.Failed(refusal(e.message))
-                        awaitChange(settings, REFUSED_AGAIN_MS)
+                        awaitChange(all, REFUSED_AGAIN_MS)
                         continue
                     }
                     if (ipc == null) {
                         _status.value = PresenceStatus.NoDiscord
-                        awaitChange(settings, LOOK_AGAIN_MS)
+                        awaitChange(all, LOOK_AGAIN_MS)
                         continue
                     }
                     _status.value = PresenceStatus.Connected(ipc.user)
@@ -88,9 +91,11 @@ class DiscordPresence(
         }
     }
 
-    /** Waits until the presence settings differ from [was], or [ms] passes. */
-    private suspend fun awaitChange(was: PresenceSettings, ms: Long) {
-        withTimeoutOrNull(ms) { coordinator.settings.first { it.presence != was } }
+    /** Waits until the presence settings (or private mode) differ from [was], or [ms] passes. */
+    private suspend fun awaitChange(was: AppSettings, ms: Long) {
+        withTimeoutOrNull(ms) {
+            coordinator.settings.first { it.presence != was.presence || it.privateMode != was.privateMode }
+        }
     }
 
     /** One connection: reads Discord's answers beside it, sends what changes, ends when it breaks. */
@@ -116,8 +121,9 @@ class DiscordPresence(
         var askedLyricsFor: String? = null
         try {
             while (scope.isActive && reader.isActive) {
-                val settings = coordinator.settings.value.presence
-                if (!settings.enabled || appId(envAppId) != id) {
+                val all = coordinator.settings.value
+                val settings = all.presence
+                if (all.privateMode || !settings.enabled || appId(envAppId) != id) {
                     runCatching { ipc.setActivity(null) }
                     return
                 }

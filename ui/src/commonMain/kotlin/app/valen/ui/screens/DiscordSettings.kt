@@ -86,7 +86,7 @@ internal fun DiscordPart(coordinator: PlaybackCoordinator) {
         )
     }
 
-    Note(presenceSentence(status, presence.enabled), Modifier.arrive(1))
+    Note(presenceSentence(status, presence.enabled, settings.privateMode), Modifier.arrive(1))
     Group(
         listOf {
             SwitchRow(
@@ -495,11 +495,14 @@ private fun TokenChip(label: String, onClick: () -> Unit) {
     }
 }
 
-private fun presenceSentence(status: PresenceStatus, enabled: Boolean): String = when (status) {
-    PresenceStatus.Off -> if (enabled) "Starting…" else "Off. Turn it on to show what you play on your Discord profile."
-    PresenceStatus.NeedsAppId -> "The application id Valen was given is not a number. Remove it to use Valen's own."
-    PresenceStatus.NoDiscord -> "Discord is not open. Valen looks for it every few seconds."
-    PresenceStatus.Connecting -> "Looking for Discord…"
-    is PresenceStatus.Connected -> status.user?.let { "Showing on Discord as $it." } ?: "Showing on Discord."
-    is PresenceStatus.Failed -> status.reason
-}
+private fun presenceSentence(status: PresenceStatus, enabled: Boolean, privateMode: Boolean): String =
+    if (privateMode) {
+        "Off while Private mode is on: nothing you play is shown on Discord."
+    } else when (status) {
+        PresenceStatus.Off -> if (enabled) "Starting…" else "Off. Turn it on to show what you play on your Discord profile."
+        PresenceStatus.NeedsAppId -> "The application id Valen was given is not a number. Remove it to use Valen's own."
+        PresenceStatus.NoDiscord -> "Discord is not open. Valen looks for it every few seconds."
+        PresenceStatus.Connecting -> "Looking for Discord…"
+        is PresenceStatus.Connected -> status.user?.let { "Showing on Discord as $it." } ?: "Showing on Discord."
+        is PresenceStatus.Failed -> status.reason
+    }

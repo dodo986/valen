@@ -93,6 +93,10 @@ class SpotifyProvider(
 
     override suspend fun release(id: String) = artists.release(id)
 
+    override suspend fun findReleases(query: String, limit: Int) = artists.findReleases(query, limit)
+
+    override suspend fun findPlaylists(query: String, limit: Int) = artists.findPlaylists(query, limit)
+
     /**
      * The song's words from Spotify's lyrics card, for a signed-in account. Never wakes the Web
      * Player: a page that is not up yet is skipped, and the song is asked about again later.

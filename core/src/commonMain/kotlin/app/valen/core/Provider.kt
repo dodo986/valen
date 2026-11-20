@@ -210,10 +210,21 @@ data class AppSettings(
     val shuffle: Boolean = false,
     /** What happens at the end of a song and of the queue. */
     val repeat: RepeatMode = RepeatMode.OFF,
+    /**
+     * When the queue runs out (and nothing repeats), songs like its last ones play on, as a radio
+     * would; off, the music stops with the last song.
+     */
+    val keepPlaying: Boolean = true,
     /** The queue and the place in it when Valen last closed, so the next start picks up there. */
     val session: SavedSession? = null,
     /** Keep the screen awake while the player is open (where the platform allows it). */
     val keepScreenOn: Boolean = false,
+    /**
+     * Nothing about what is listened to is counted while this is on: no stats, no weekly recap, no
+     * new taste for the mixes, and no Discord card. Playback itself is unchanged, and what was
+     * already counted stays (the switch stops the counting, it does not erase it).
+     */
+    val privateMode: Boolean = false,
     /** Whether the library shows "Offline": every song downloaded or kept whole by the cache. */
     val offlineList: Boolean = true,
     /** The stage shows the song's words beside (or instead of) its cover. */
@@ -259,4 +270,6 @@ data class SavedSession(
     val unshuffled: List<Track>? = null,
     /** The queue was made by the engine (a mix, a radio, "For you"): its listening is counted apart. */
     val generated: Boolean = false,
+    /** Songs Valen added to the queue to keep it going ([AppSettings.keepPlaying]), by [Track.key]. */
+    val offered: List<String> = emptyList(),
 )

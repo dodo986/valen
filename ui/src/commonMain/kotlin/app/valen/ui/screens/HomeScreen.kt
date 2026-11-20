@@ -76,6 +76,10 @@ import app.valen.ui.components.rise
 import app.valen.ui.components.arrive
 import app.valen.ui.components.ItemArrival
 import app.valen.ui.components.taped
+import app.valen.ui.components.Posters
+import app.valen.ui.components.repaintFrom
+import app.valen.ui.components.PosterEntry
+import app.valen.ui.components.rememberWentBack
 import app.valen.ui.components.tilt
 import app.valen.ui.artwork.LocalPlayingTones
 import app.valen.ui.components.tap
@@ -116,6 +120,7 @@ fun HomeScreen(
     val settings by coordinator.settings.collectAsState()
 
     val current = snapshot?.track ?: queue.getOrNull(index)
+    val back = rememberWentBack(current?.key, index, queue)
     val history = remember(queue, index) {
         if (index <= 0) emptyList() else queue.take(index).reversed().distinctBy { it.key }.take(12)
     }
@@ -135,6 +140,7 @@ fun HomeScreen(
             .fillMaxSize()) {
         Lead(
             track = current,
+            back = back,
             isPlaying = snapshot?.isPlaying == true,
             connected = coordinator.services.count { sessions[it] is SessionState.Connected },
             onToggle = { scope.launch { coordinator.toggle() } },
@@ -227,6 +233,7 @@ fun HomeScreen(
 @Composable
 private fun Lead(
     track: Track?,
+    back: Boolean,
     isPlaying: Boolean,
     connected: Int,
     onToggle: () -> Unit,
@@ -258,7 +265,8 @@ private fun Lead(
             }
         }
     } else {
-        val tones = track?.let { ArtworkPalette.tones(it.artworkUrl) }
+        val settled = app.valen.ui.artwork.rememberSettledTones(track?.artworkUrl)
+        val tones = track?.let { settled }
         if (tones == null) {
             ContentColumn {
                 WideLead(greeting = greeting, onSettings = onSettings) {
@@ -266,10 +274,11 @@ private fun Lead(
                 }
             }
         } else {
-            WashedBand(tones = tones) {
+            WashedBand(tones = tones, lit = isPlaying) {
                 WideLead(greeting = greeting, onSettings = onSettings) {
                     WideHero(
                         track = track,
+                        back = back,
                         isPlaying = isPlaying,
                         onToggle = onToggle,
                         onOpen = onOpenPlayer,
@@ -296,10 +305,14 @@ private fun WideLead(
 
 /** The page's opening band: one wash, and content pinned to the page's left edge. */
 @Composable
-private fun WashedBand(tones: ArtworkTones, content: @Composable () -> Unit) {
+private fun WashedBand(tones: ArtworkTones, lit: Boolean = true, content: @Composable () -> Unit) {
+    // The hero's cover pours a new song's colour into the band, and the band dims while paused.
+    val spot = remember { app.valen.ui.components.RepaintSpot() }
     Box(modifier = Modifier.fillMaxWidth()) {
-        AmbientWash(tones = tones, modifier = Modifier.matchParentSize())
-        ContentColumn { content() }
+        AmbientWash(tones = tones, spot = spot, lit = lit, modifier = Modifier.matchParentSize())
+        androidx.compose.runtime.CompositionLocalProvider(app.valen.ui.components.LocalRepaintSpot provides spot) {
+            ContentColumn { content() }
+        }
     }
 }
 
@@ -412,6 +425,7 @@ private fun PhoneHero(
 @Composable
 private fun WideHero(
     track: Track,
+    back: Boolean,
     isPlaying: Boolean,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
@@ -435,20 +449,38 @@ private fun WideHero(
                 HeroActions(isPlaying = isPlaying, onToggle = onToggle, onOpen = onOpen)
             }
             val coverSource = rememberInteraction()
-            Artwork(
-                url = track.artworkUrl,
-                shape = Radii.artworkShape,
-                contentDescription = null,
-                measure = true,
-                iconSize = 48.dp,
+            // A poster on the band: the next song's is slapped on over it, going back lifts it off.
+            val spot = app.valen.ui.components.LocalRepaintSpot.current
+            Posters(
+                item = track,
+                key = { it.key },
+                // A song with the same cover (an album played through) keeps the poster up and only
+                // re-tapes it: an identical sheet is never torn down.
+                same = { a, b -> a.artworkUrl != null && a.artworkUrl == b.artworkUrl },
+                back = back,
+                // No clip on the stack: the tape hangs past the cover's corners. The press is
+                // each poster's own, under its tape.
                 modifier = Modifier
                     .size(cover)
-                    .pasted(seed = track.key.hashCode(), source = coverSource)
+                    .then(if (spot != null) Modifier.repaintFrom(spot) else Modifier)
                     .tilt()
-                    .taped(track.key)
-                    .hoverLift(coverSource)
-                    .tap(onClick = onOpen, shape = Radii.artworkShape, source = coverSource),
-            )
+                    .hoverLift(coverSource),
+            ) { shown, entry, onReady ->
+                Artwork(
+                    url = shown.artworkUrl,
+                    shape = Radii.artworkShape,
+                    contentDescription = null,
+                    measure = shown.key == track.key,
+                    animate = entry == PosterEntry.First,
+                    onReady = onReady,
+                    iconSize = 48.dp,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pasted(seed = shown.key.hashCode(), source = coverSource)
+                        .taped(shown.key, already = entry == PosterEntry.Returned)
+                        .tap(onClick = onOpen, shape = Radii.artworkShape, source = coverSource),
+                )
+            }
         }
     }
 }

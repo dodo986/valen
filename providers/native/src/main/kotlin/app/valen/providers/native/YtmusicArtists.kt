@@ -15,17 +15,37 @@ import app.valen.core.ReleaseKind
 import app.valen.core.ReleaseTracks
 import app.valen.core.ServiceArtist
 import app.valen.core.ServicePlaylist
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * YouTube Music's artist and album pages for [app.valen.core.ArtistDirectory], read signed out
  * through the web app's own API (its search, its artist and album browse pages).
  */
-internal class YtmusicArtists(private val api: InnerTube) {
+internal class YtmusicArtists(
+    private val api: InnerTube,
+    private val searches: YtmSearches = YtmSearches(api, CoroutineScope(SupervisorJob() + Dispatchers.IO)),
+) {
 
     suspend fun find(query: String, limit: Int): List<ServiceArtist> =
-        YtmParse.search(api.search(query.trim()))
+        YtmParse.search(searches.answer(query))
             .filterIsInstance<YtmParse.Item.ArtistItem>()
             .mapNotNull { it.artist.toService() }
+            .take(limit)
+
+    suspend fun findReleases(query: String, limit: Int): List<Release> =
+        YtmParse.search(searches.answer(query))
+            .filterIsInstance<YtmParse.Item.AlbumItem>()
+            .mapNotNull { it.album.toRelease(fallbackArtist = "") }
+            .distinctBy { it.id }
+            .take(limit)
+
+    suspend fun findPlaylists(query: String, limit: Int): List<ServicePlaylist> =
+        YtmParse.search(searches.answer(query))
+            .filterIsInstance<YtmParse.Item.PlaylistItem>()
+            .mapNotNull { it.playlist.toService() }
+            .distinctBy { it.id }
             .take(limit)
 
     suspend fun artist(id: String): ArtistProfile {

@@ -494,13 +494,14 @@ fun Modifier.pasted(seed: Int, source: MutableInteractionSource): Modifier {
 
 /**
  * Two strips of tape holding a cover to the wall at its top corners, slapped on — overshooting
- * down onto the cover and settling — each time [key] (the song) changes.
+ * down onto the cover and settling — each time [key] (the song) changes, unless it is [already] on.
  */
 @Composable
-fun Modifier.taped(key: Any?): Modifier {
+fun Modifier.taped(key: Any?, already: Boolean = false): Modifier {
     val reduced = LocalReducedMotion.current
-    val slap = remember(key) { Animatable(if (reduced) 1f else 0f) }
-    LaunchedEffect(key) { if (!reduced) slap.animateTo(1f, tween(Motion.KineticMs, delayMillis = Motion.EnterMs, easing = Motion.Kinetic)) }
+    // [already]: a poster found again (going back) still has the tape it was put up with.
+    val slap = remember(key) { Animatable(if (reduced || already) 1f else 0f) }
+    LaunchedEffect(key) { if (!reduced && slap.value < 1f) slap.animateTo(1f, tween(Motion.KineticMs, delayMillis = Motion.EnterMs, easing = Motion.Kinetic)) }
     return drawWithContent {
         drawContent()
         val p = slap.value

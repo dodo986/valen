@@ -79,6 +79,8 @@ fun PlayerBar(
     onQueue: () -> Unit,
     modifier: Modifier = Modifier,
     modes: PlayModes? = null,
+    /** How many songs the queue holds, read where it is drawn: a song dropped in is swallowed. */
+    queueSize: () -> Int = { 0 },
 ) {
     val tint by animateColorAsState(tones.chrome, Motion.tint(), label = "dockTint")
     val reduced = LocalReducedMotion.current
@@ -162,7 +164,7 @@ fun PlayerBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Space.step1),
             ) {
-                IconTap(icon = Icons.AutoMirrored.Rounded.QueueMusic, label = "Queue", onClick = onQueue)
+                QueueGlyph(count = queueSize(), song = track.key, onClick = onQueue)
                 MoreButton(track = track, origin = MenuOrigin.Player)
                 if (showVolume) {
                     VolumeSlider(volume = volume, onVolume = onVolume, railWidth = 88.dp)
@@ -235,6 +237,43 @@ internal fun PlayerCover(url: String?, size: Dp, playing: Boolean, modifier: Mod
         measure = true,
         modifier = modifier.graphicsLayer {
             val s = sink * arrive.value
+            scaleX = s
+            scaleY = s
+        },
+    )
+}
+
+/**
+ * The way to the queue, which swallows what is dropped into it: when a song is added (the queue
+ * grows while the same song plays), the glyph swells and rings out on the jelly spring, taking
+ * the one colour for a moment, so it is plain where "Add to queue" put it.
+ */
+@Composable
+private fun QueueGlyph(count: Int, song: String, onClick: () -> Unit) {
+    val reduced = LocalReducedMotion.current
+    val flights = LocalFlights.current
+    val swallow = remember { Animatable(0f) }
+    val seen = remember { arrayOf<Any>(count, song, flights.landed) }
+    // A drop landing, or (with none in the air, as from the song menu) the queue growing.
+    LaunchedEffect(count, song, flights.landed) {
+        val grew = count > seen[0] as Int && song == seen[1] && flights.inAir == 0
+        val landed = flights.landed != seen[2]
+        seen[0] = count
+        seen[1] = song
+        seen[2] = flights.landed
+        if ((grew || landed) && !reduced) {
+            swallow.animateTo(1f, androidx.compose.animation.core.tween(Motion.KickMs, easing = Motion.Exit))
+            swallow.animateTo(0f, Motion.jelly())
+        }
+    }
+    val inked = (swallow.value).coerceIn(0f, 1f)
+    IconTap(
+        icon = Icons.AutoMirrored.Rounded.QueueMusic,
+        label = "Queue",
+        onClick = onClick,
+        tint = androidx.compose.ui.graphics.lerp(ValenColors.Text2, ValenColors.Primary, inked),
+        modifier = Modifier.flightDoor(flights).graphicsLayer {
+            val s = 1f + (Motion.SwallowScale - 1f) * swallow.value
             scaleX = s
             scaleY = s
         },

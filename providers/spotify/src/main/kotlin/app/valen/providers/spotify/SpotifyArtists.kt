@@ -26,6 +26,16 @@ internal class SpotifyArtists(private val api: () -> SpotifyApi, private val rea
         return api().search.artists(query, 0, limit).items.mapNotNull { it.toService() }
     }
 
+    suspend fun findReleases(query: String, limit: Int): List<Release> {
+        ready()
+        return api().search.albums(query, 0, limit).items.mapNotNull { it.toRelease() }
+    }
+
+    suspend fun findPlaylists(query: String, limit: Int): List<ServicePlaylist> {
+        ready()
+        return api().search.playlists(query, 0, limit).items.mapNotNull { it.toService() }
+    }
+
     suspend fun artist(id: String): ArtistProfile {
         ready()
         val page = api().catalog.artistPage("spotify:artist:$id")

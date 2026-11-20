@@ -1,7 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.components
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
@@ -70,14 +74,43 @@ fun QueueRow(
     dragDelta: (Float) -> Unit = {},
     /** This row's place in the queue, for its menu (right click, long press); none without it. */
     menuIndex: Int? = null,
+    /** Held by its handle: it comes off the wall like a strip of paper, and is slapped back. */
+    held: Boolean = false,
 ) {
     val compact = LocalChrome.current.compact
     val origin = menuIndex?.let { MenuOrigin.Queue(it) }
+    val reduced = LocalReducedMotion.current
+    val lift = remember { Animatable(0f) }
+    LaunchedEffect(held) {
+        when {
+            reduced -> lift.snapTo(if (held) 1f else 0f)
+            held -> lift.animateTo(1f, Motion.lean())
+            // Let go: slapped flat, a touch past and back, like the paper it is.
+            lift.value > 0f -> lift.animateTo(0f, tween(Motion.KineticMs, easing = Motion.Kinetic))
+        }
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
             .height(QueueRowHeight)
+            .graphicsLayer {
+                val l = lift.value
+                val s = 1f + (Motion.HeldScale - 1f) * l
+                scaleX = s
+                scaleY = s
+                rotationZ = -Motion.HeldDegrees * l
+            }
+            .drawBehind {
+                // Lifted, the strip catches the light: the raised fill, in the row's own shape.
+                val l = lift.value.coerceIn(0f, 1f)
+                if (l > 0f) {
+                    drawOutline(
+                        Radii.rowShape.createOutline(size, layoutDirection, this),
+                        ValenColors.Fill.copy(alpha = ValenColors.Fill.alpha * l),
+                    )
+                }
+            }
             .then(if (origin != null) Modifier.songMenuOnRightClick(track, origin) else Modifier)
             .tap(
                 onClick = onPlay,

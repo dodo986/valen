@@ -19,6 +19,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.key.Key
 import app.valen.core.MusicProvider
 import app.valen.core.ArtistCatalog
 import app.valen.core.ArtistProfile
@@ -92,6 +93,17 @@ class ShellSmokeTest {
             playlists = listOf(ServicePlaylist(this.id, "pl-${this.id.short}", "This is Night Drive (${this.id.short})", owner = this.id.label)),
             related = listOf(ServiceArtist(this.id, "rel-1", "Neon Coast"), ServiceArtist(this.id, "rel-2", "Glass Harbour")),
         )
+
+        /** Every service has the album "Headlights" and a playlist of its own for "night". */
+        override suspend fun findReleases(query: String, limit: Int): List<Release> =
+            if (query.contains("night", ignoreCase = true)) listOf(Release(this.id, "alb-1", "Headlights", "Night Drive", ReleaseKind.ALBUM, 2024)) else emptyList()
+
+        override suspend fun findPlaylists(query: String, limit: Int): List<ServicePlaylist> =
+            if (query.contains("night", ignoreCase = true)) {
+                listOf(ServicePlaylist(this.id, "spl-${this.id.short}", "Night roads (${this.id.short})", owner = "Someone"))
+            } else {
+                emptyList()
+            }
 
         override suspend fun release(id: String): ReleaseTracks = ReleaseTracks(
             Release(this.id, id, if (id == "alb-1") "Headlights" else id, "Night Drive"),
@@ -691,6 +703,146 @@ class ShellSmokeTest {
         onNodeWithText("Home").performClick()
         settle()
         assertTrue(coordinator.queue.value.isNotEmpty())
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(240)
+    fun `search opens at its best songs, and lists the albums and playlists by that name once each`() = inApp(1600, 900) { coordinator, playlists ->
+        setContent { ValenApp(coordinator, playlists, "search", startQuery = "night") }
+        settleUntil(5_000) { onAllNodesWithText("Headlights").fetchSemanticsNodes().isNotEmpty() }
+        settle()
+        // Twelve songs open at six; the rest are a press away.
+        onNodeWithText("All 12 songs").assertExists()
+        assertEquals(1, onAllNodesWithText("Spotify song 0").fetchSemanticsNodes().size)
+        // Three services have "Headlights" by the same artist: one album.
+        onNodeWithText("Albums").assertExists()
+        assertEquals(1, onAllNodesWithText("Headlights").fetchSemanticsNodes().size)
+        // "Playlists" is also the side panel's: the shelf's header is the second.
+        assertEquals(2, onAllNodesWithText("Playlists").fetchSemanticsNodes().size)
+        onNodeWithText("Night roads (Spotify)", substring = true).assertExists()
+
+        // Both are below the fold: pressed through their click action (AGENTS §5).
+        onNodeWithText("All 12 songs").performSemanticsAction(SemanticsActions.OnClick)
+        settle()
+        onNodeWithText("Fewer songs").assertExists()
+
+        // The album opens its own page, from the preferred service's copy.
+        onNodeWithText("Headlights").performSemanticsAction(SemanticsActions.OnClick)
+        settleUntil(5_000) { onAllNodesWithText("Track 0 of alb-1").fetchSemanticsNodes().isNotEmpty() }
+        onAllNodesWithText("Track 0 of alb-1")[0].assertExists()
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(240)
+    fun `the keyboard plays, seeks, opens places and stands aside while a field has the caret`() = inApp(1600, 900) { coordinator, playlists ->
+        var now = 10_000L
+        val keys = KeyShortcuts(clock = { now })
+        fun press(press: Press): Boolean {
+            // Each press a second after the last: never read as a held key repeating.
+            now += 1_000
+            return keys.press(press)
+        }
+        runBlocking {
+            val songs = coordinator.unifiedSearch("warm up").tracks
+            coordinator.play(songs[0], songs)
+        }
+        setContent { ValenApp(coordinator, playlists, keys = keys) }
+        settleUntil { coordinator.snapshot.value?.isPlaying == true }
+        settle()
+
+        // Space pauses; held down, it does not flick back.
+        assertTrue(press(Press(Key.Spacebar)))
+        settleUntil { coordinator.snapshot.value?.isPlaying == false }
+        assertEquals(false, coordinator.snapshot.value?.isPlaying)
+        now += 50
+        assertTrue(keys.press(Press(Key.Spacebar)), "a repeat is taken, and does nothing")
+        settle(300)
+        assertEquals(false, coordinator.snapshot.value?.isPlaying)
+
+        // The arrows step the song; held, each step goes on from the last.
+        val playing = coordinator.provider(coordinator.snapshot.value!!.track!!.provider)!!
+        assertTrue(press(Press(Key.DirectionRight)))
+        now += 30
+        keys.press(Press(Key.DirectionRight))
+        settleUntil { playing.player.value?.positionMs == 10_000L }
+        assertEquals(10_000L, playing.player.value?.positionMs)
+
+        // Volume, and mute giving it back.
+        val before = coordinator.settings.value.volume
+        press(Press(Key.DirectionDown, ctrl = true))
+        settleUntil { coordinator.settings.value.volume < before }
+        val lowered = coordinator.settings.value.volume
+        assertTrue(lowered < before, "quieter: $lowered")
+        press(Press(Key.M, char = 'm'))
+        settleUntil { coordinator.settings.value.volume == 0f }
+        assertEquals("Muted", coordinator.notice.value)
+        press(Press(Key.M, char = 'm'))
+        settleUntil { coordinator.settings.value.volume > 0f }
+        assertEquals(lowered, coordinator.settings.value.volume)
+
+        // Shuffle says so, since its button may be nowhere in sight.
+        press(Press(Key.S, char = 's'))
+        assertEquals(true, coordinator.settings.value.shuffle)
+        assertEquals("Shuffle on", coordinator.notice.value)
+
+        // N puts the stage up and takes it down; Esc closes it too.
+        press(Press(Key.N, char = 'n'))
+        settle()
+        onNodeWithContentDescription("Close the player").assertExists()
+        press(Press(Key.Escape))
+        settle()
+        onAllNodesWithContentDescription("Close the player").fetchSemanticsNodes().let { assertTrue(it.isEmpty(), "the stage closed") }
+
+        // Ctrl F opens search with the caret in it: then Space types, and Esc lets go of the field.
+        press(Press(Key.F, ctrl = true))
+        settle()
+        assertTrue(Typing.active, "the search field has the caret")
+        assertEquals(false, press(Press(Key.Spacebar)), "a space is typed, not played")
+        assertEquals(false, coordinator.snapshot.value?.isPlaying)
+        assertTrue(press(Press(Key.Escape)))
+        settle()
+        assertEquals(false, Typing.active)
+        press(Press(Key.Spacebar))
+        settleUntil { coordinator.snapshot.value?.isPlaying == true }
+        assertEquals(true, coordinator.snapshot.value?.isPlaying)
+
+        // ? puts the keys up on the wall, Esc takes them down.
+        press(Press(Key.Slash, char = '?', shift = true))
+        settle(1_000)
+        onNodeWithText("Keys").assertExists()
+        onNodeWithText("Previous or next song").assertExists()
+        press(Press(Key.Escape))
+        settle(1_000)
+        assertTrue(onAllNodesWithText("Previous or next song").fetchSemanticsNodes().isEmpty(), "the keys page came down")
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(240)
+    fun `a long playlist is found in by name and sorted, and plays in the order shown`() = inApp(1600, 900) { coordinator, playlists ->
+        val songs = (0 until 12).map { n ->
+            Track(ProviderId.YOUTUBE_MUSIC, "pl-$n", listOf("Delta", "alpha", "Charlie", "bravo")[n % 4] + " $n", "Artist ${n % 3}", durationMs = 100_000L + (12 - n) * 1_000L)
+        }
+        runBlocking { playlists.library.add("Long list", songs, artworkUrl = null) }
+        setContent { ValenApp(coordinator, playlists, "playlists") }
+        settle()
+        onNodeWithText("Long list").performClick()
+        settle()
+
+        onNodeWithText("Playlist order").assertExists()
+        onNodeWithText("Title").performClick()
+        settle()
+        onNodeWithText("Title A–Z").assertExists()
+        // Play follows the order on screen: alpha first.
+        onNodeWithText("Play").performClick()
+        settleUntil { coordinator.snapshot.value?.track != null }
+        assertEquals("alpha 1", coordinator.queue.value.first().title)
+        assertEquals(songs.map { it.title }.sortedBy { it.lowercase() }, coordinator.queue.value.map { it.title })
+
+        // Finding narrows the rows only; the field is the one that says so.
+        onAllNodes(hasSetTextAction())[0].performTextInput("charlie")
+        settle(600)
+        assertEquals(3, onAllNodesWithText("Charlie", substring = true).fetchSemanticsNodes().size)
+        assertTrue(onAllNodesWithText("Delta 0").fetchSemanticsNodes().isEmpty())
     }
 
     @Test

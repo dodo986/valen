@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.components
 
+import app.valen.ui.typing
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -56,6 +57,7 @@ fun NameField(
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { onDone() }),
         modifier = modifier
+            .typing()
             .focusRequester(focus)
             .semantics { contentDescription = label }
             .onPreviewKeyEvent { event ->

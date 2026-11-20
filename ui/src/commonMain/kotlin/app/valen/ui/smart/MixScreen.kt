@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.smart
 
+import app.valen.ui.typing
 import androidx.compose.animation.animateColorAsState
 import app.valen.ui.components.ScrollPage
 import androidx.compose.animation.core.Animatable
@@ -298,7 +299,7 @@ private fun NameField(name: String, onName: (String) -> Unit) {
         singleLine = true,
         textStyle = style,
         cursorBrush = SolidColor(ValenColors.Primary),
-        modifier = Modifier.widthIn(max = 300.dp).fillMaxWidth(),
+        modifier = Modifier.typing().widthIn(max = 300.dp).fillMaxWidth(),
         decorationBox = { field ->
             Box(contentAlignment = Alignment.Center) {
                 if (name.isEmpty()) Text("Name it", style = style.copy(color = ValenColors.Text3))

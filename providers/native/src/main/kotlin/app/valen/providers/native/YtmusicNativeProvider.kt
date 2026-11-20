@@ -52,9 +52,16 @@ class YtmusicNativeProvider(
 
     override val provider: ProviderId get() = id
 
-    private val artists = YtmusicArtists(api)
+    /** The songs, artists, albums and playlists of a query come in one reply, asked for once. */
+    private val searches = YtmSearches(api, scope)
+
+    private val artists = YtmusicArtists(api, searches)
 
     override suspend fun findArtists(query: String, limit: Int) = artists.find(query, limit)
+
+    override suspend fun findReleases(query: String, limit: Int) = artists.findReleases(query, limit)
+
+    override suspend fun findPlaylists(query: String, limit: Int) = artists.findPlaylists(query, limit)
 
     override suspend fun artist(id: String) = artists.artist(id)
 
@@ -76,7 +83,7 @@ class YtmusicNativeProvider(
 
     override suspend fun search(query: String, limit: Int): List<Track> {
         if (query.isBlank() || limit <= 0) return emptyList()
-        return YtmParse.search(api.search(query.trim()))
+        return YtmParse.search(searches.answer(query))
             .filterIsInstance<YtmParse.Item.Song>()
             .mapNotNull { it.track.toValenTrack() }
             .distinctBy { it.id }

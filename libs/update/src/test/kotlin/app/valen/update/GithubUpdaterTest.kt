@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -122,11 +123,16 @@ class GithubUpdaterTest {
                       {"name":"valen-release.json","size":${manifest.length},"browser_download_url":"$base/files/$version.json"}]}"""
     }
 
-    private class FakeInstaller(override val route: UpdateRoute = UpdateRoute.Itself) : UpdateInstaller {
+    private class FakeInstaller(
+        override val route: UpdateRoute = UpdateRoute.Itself,
+        /** What the installer does while it is being handed the file (it may answer at once). */
+        private val during: (() -> Unit)? = null,
+    ) : UpdateInstaller {
         override val platform: String? = "linux-appimage"
         val installed = CopyOnWriteArrayList<Pair<File, AppRelease>>()
         override suspend fun install(file: File, release: AppRelease): UpdateInstaller.Outcome {
             installed += file to release
+            during?.invoke()
             return if (route == UpdateRoute.Itself) UpdateInstaller.Outcome.InPlace else UpdateInstaller.Outcome.HandedOver
         }
     }
@@ -221,10 +227,28 @@ class GithubUpdaterTest {
         assertTrue(state is UpdateState.Ready, "state: $state")
         assertTrue(installer.installed.isEmpty())
         updater.update()
-        runBlocking { withTimeout(10_000) { updater.state.first { it is UpdateState.Installing } } }
+        // Wait until the file really is with the system's installer, not just until the state says
+        // "installing" (the state is set before the hand-over, which was the race here).
+        runBlocking { withTimeout(10_000) { while (installer.installed.isEmpty()) delay(10) } }
         assertEquals(1, installer.installed.size)
         updater.installerSaid(InstallerReport.Cancelled)
-        assertTrue(updater.state.value is UpdateState.Ready)
+        assertTrue(updater.state.value is UpdateState.Ready, "state: ${updater.state.value}")
+    }
+
+    @Test
+    fun `an installer that answers while it is handed the file does not put the state back to installing`() {
+        releases = "[${release("1.0.0-alpha.3", 10_000_103)}]"
+        lateinit var updater: GithubUpdater
+        // The system's installer can report a Cancel before install() returns: that answer is newer
+        // than the hand-over and must not be overwritten by it.
+        val installer = FakeInstaller(UpdateRoute.System) { updater.installerSaid(InstallerReport.Cancelled) }
+        updater = updater("1.0.0-alpha.2", installer)
+        assertTrue(updater.settled() is UpdateState.Ready)
+        updater.update()
+        runBlocking { withTimeout(10_000) { while (installer.installed.isEmpty()) delay(10) } }
+        // Let the hand-over's own steps run out, then the sheet must still say Ready.
+        Thread.sleep(200)
+        assertTrue(updater.state.value is UpdateState.Ready, "state: ${updater.state.value}")
     }
 
     @Test

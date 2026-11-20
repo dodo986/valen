@@ -6,6 +6,13 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.produceState
 import app.valen.core.ArtistResult
+import app.valen.core.MergedRelease
+import app.valen.core.ReleaseKind
+import app.valen.core.ServicePlaylist
+import app.valen.ui.artist.CoverCard
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.ExpandLess
 import app.valen.ui.artist.BrowsePage
 import app.valen.ui.artist.LocalBrowser
 import app.valen.ui.components.ArtistBubble
@@ -79,6 +86,9 @@ private const val DebounceMs = 320L
 @Stable
 class SearchState(initialQuery: String = "") {
     var query by mutableStateOf(initialQuery)
+
+    /** Counts the times the keyboard asked for the field (Ctrl F, /): each one puts the caret back in it. */
+    internal var focusAsk by mutableStateOf(0)
     var enabled by mutableStateOf(ProviderId.entries.toSet())
     internal var answer by mutableStateOf<UnifiedSearch?>(null)
 
@@ -130,6 +140,8 @@ fun SearchScreen(
     if (!chrome.compact) {
         LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     }
+    // Asked from the keyboard, on any width (a phone with a keyboard plugged in asked for it too).
+    LaunchedEffect(state.focusAsk) { if (state.focusAsk > 0) runCatching { focus.requestFocus() } }
 
     // Artists by that name on every service, asked beside the songs (a page of theirs is a tap away).
     val browser = LocalBrowser.current
@@ -139,6 +151,27 @@ fun SearchScreen(
         delay(DebounceMs)
         value = runCatching { coordinator.artists.search(trimmed, 8) }.getOrDefault(emptyList())
     }
+    // Albums and playlists by that name, asked the same way; on YouTube Music the same one reply.
+    val releasesFound by produceState(emptyList<MergedRelease>(), trimmed) {
+        value = emptyList()
+        if (trimmed.isEmpty()) return@produceState
+        delay(DebounceMs)
+        value = runCatching { coordinator.artists.searchReleases(trimmed, 12) }.getOrDefault(emptyList())
+    }
+    val playlistsFound by produceState(emptyList<ServicePlaylist>(), trimmed) {
+        value = emptyList()
+        if (trimmed.isEmpty()) return@produceState
+        delay(DebounceMs)
+        value = runCatching { coordinator.artists.searchPlaylists(trimmed, 12) }.getOrDefault(emptyList())
+    }
+    // The service chips choose for these too: a release is kept with only the chosen services' copies.
+    val releases = releasesFound.mapNotNull { r ->
+        r.copies.filter { it.provider in state.enabled }.takeIf { it.isNotEmpty() }?.let { r.copy(copies = it) }
+    }
+    val lists = playlistsFound.filter { it.provider in state.enabled }
+    // A long list of songs opens at its best few; the rest are a press away, so the albums and
+    // playlists under it are not a scroll past fifty songs.
+    var allSongs by remember(trimmed) { mutableStateOf(false) }
 
     val playingKey = snapshot?.track?.key
     val accent = ArtworkPalette.tones(snapshot?.track?.artworkUrl).bright
@@ -209,6 +242,8 @@ fun SearchScreen(
                             }
                         }
                         Spacer(Modifier.height(Space.step6))
+                    }
+                    if (artistsFound.isNotEmpty() || releases.isNotEmpty() || lists.isNotEmpty()) {
                         SectionHeader(title = "Songs")
                     }
                     Text(
@@ -233,8 +268,10 @@ fun SearchScreen(
                     } else {
                         // Tapping any row queues the whole merged list, in the order shown.
                         val context = hits.map { it.track }
+                        val folded = !allSongs && hits.size > SongsAtFirst + 2
+                        val shown = if (folded) hits.take(SongsAtFirst) else hits
                         Column(modifier = Modifier.fillMaxWidth().bleed(Space.step2)) {
-                            hits.forEachIndexed { i, hit ->
+                            shown.forEachIndexed { i, hit ->
                                 val key = hit.track.key
                                 ResultRow(
                                     modifier = Modifier.rise(i),
@@ -250,11 +287,76 @@ fun SearchScreen(
                                 )
                             }
                         }
+                        if (hits.size > SongsAtFirst + 2) {
+                            Spacer(Modifier.height(Space.step2))
+                            QuietButton(
+                                label = if (folded) "All ${hits.size} songs" else "Fewer songs",
+                                icon = if (folded) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess,
+                                onClick = { allSongs = !allSongs },
+                                small = true,
+                            )
+                        }
+                    }
+                    if (releases.isNotEmpty()) {
+                        Spacer(Modifier.height(Space.step8))
+                        SectionHeader(title = "Albums")
+                        Spacer(Modifier.height(Space.step3))
+                        CoverShelf(releases, key = { it.key + "|" + it.artist + "|" + it.kind }) { i, release ->
+                            CoverCard(
+                                seed = (release.key + release.artist).hashCode(),
+                                artwork = release.artworkUrl,
+                                title = release.title,
+                                // The artist first: a search finds the same title by several.
+                                detail = listOfNotNull(
+                                    release.artist.takeIf { it.isNotBlank() },
+                                    release.kind.takeIf { it != ReleaseKind.ALBUM }?.label,
+                                    release.year?.toString(),
+                                ).joinToString("  ·  "),
+                                size = if (chrome.compact) 148.dp else 176.dp,
+                                onClick = { browser.open(BrowsePage.Album(release)) },
+                                modifier = Modifier.arrive(i, ItemArrival.Slap),
+                            )
+                        }
+                    }
+                    if (lists.isNotEmpty()) {
+                        Spacer(Modifier.height(Space.step8))
+                        SectionHeader(title = "Playlists")
+                        Spacer(Modifier.height(Space.step3))
+                        CoverShelf(lists, key = { it.provider.name + it.id }) { i, list ->
+                            CoverCard(
+                                seed = list.id.hashCode(),
+                                artwork = list.artworkUrl,
+                                title = list.title,
+                                detail = listOfNotNull(
+                                    list.owner?.takeUnless { it.equals(list.provider.label, true) || it.equals(list.provider.short, true) },
+                                    list.provider.short,
+                                ).joinToString("  ·  "),
+                                size = if (chrome.compact) 148.dp else 176.dp,
+                                onClick = { if (list.link != null) browser.open(BrowsePage.Listing(list)) },
+                                modifier = Modifier.arrive(i, ItemArrival.Slap),
+                            )
+                        }
                     }
                 }
             }
         }
         PageBottom()
+    }
+}
+
+/** How many songs a long result opens with, before "All … songs". */
+private const val SongsAtFirst = 6
+
+/** A row of covers running off the page's edges, scrolled sideways (albums, playlists). */
+@Composable
+private fun <T> CoverShelf(items: List<T>, key: (T) -> Any, card: @Composable (Int, T) -> Unit) {
+    val chrome = LocalChrome.current
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(Space.step4),
+        contentPadding = PaddingValues(horizontal = chrome.gutter),
+        modifier = Modifier.fillMaxWidth().bleed(chrome.gutter),
+    ) {
+        itemsIndexed(items, key = { _, it -> key(it) }) { i, item -> card(i, item) }
     }
 }
 

@@ -35,6 +35,20 @@ import org.junit.jupiter.api.Test
  */
 class ProviderRecoveryTest {
 
+    /**
+     * The wrapper answers for the adapter it wraps, so it passes on every question, those with a
+     * default answer included: a default left in place answers "none" for the wrapper instead
+     * (Spotify's albums and playlists in search were empty that way while its adapter had them).
+     */
+    @Test
+    fun `the wrapper passes on the catalogue's albums and playlists`() = harness { h ->
+        runBlocking {
+            h.provider.connect()
+            assertEquals(listOf("alb-1"), h.provider.findReleases("night", 5).map { it.id })
+            assertEquals(listOf("pl-1"), h.provider.findPlaylists("night", 5).map { it.id })
+        }
+    }
+
     @Test
     fun `a health check that recovers Chrome rebuilds the adapter in the same command`() {
         var onProbe: () -> Unit = {}
@@ -323,8 +337,16 @@ class ProviderRecoveryTest {
     }
 
     /** One adapter, as the wrapper sees it: a session it reports and a close it can be given. */
-    private class FakeProvider : MusicProvider {
+    private class FakeProvider : MusicProvider, app.valen.core.ArtistCatalog {
         override val id = ProviderId.SPOTIFY
+        override val provider: ProviderId get() = id
+        override suspend fun findArtists(query: String, limit: Int): List<app.valen.core.ServiceArtist> = emptyList()
+        override suspend fun artist(id: String): app.valen.core.ArtistProfile = error("no artist pages here")
+        override suspend fun release(id: String): app.valen.core.ReleaseTracks = error("no releases here")
+        override suspend fun findReleases(query: String, limit: Int) =
+            listOf(app.valen.core.Release(ProviderId.SPOTIFY, "alb-1", "Headlights", "Night Drive"))
+        override suspend fun findPlaylists(query: String, limit: Int) =
+            listOf(app.valen.core.ServicePlaylist(ProviderId.SPOTIFY, "pl-1", "Night roads"))
         private val mutableSession = MutableStateFlow<SessionState>(SessionState.Connected("someone"))
         override val session: StateFlow<SessionState> = mutableSession.asStateFlow()
         private val mutablePlayer = MutableStateFlow<PlayerSnapshot?>(null)

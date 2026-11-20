@@ -77,6 +77,11 @@ object ValenColors {
     /** Tape holding a cover to the wall: warm paper, mostly see-through. */
     val Tape = Color(0x70EDE4D3)
 
+    /** The back of a piece of paper, warm off-white: the unroll's roll, lit from above. */
+    val Paper = Color(0xFFE2D9C7)
+    val PaperLight = Color(0xFFF4EEE2)
+    val PaperShade = Color(0xFF8C8475)
+
     val GrainLight = Color(0x09FFFFFF)
     val GrainDark = Color(0x12000000)
 

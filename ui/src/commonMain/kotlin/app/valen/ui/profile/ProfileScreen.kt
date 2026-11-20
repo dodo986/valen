@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.profile
 
+import app.valen.ui.typing
 import androidx.compose.animation.core.Animatable
 import app.valen.ui.components.ScrollPage
 import androidx.compose.animation.core.tween
@@ -125,7 +126,7 @@ fun ProfileScreen(coordinator: PlaybackCoordinator, modifier: Modifier = Modifie
             }
             Spacer(Modifier.height(Space.step16))
             ContentColumn {
-                Stats(log = log)
+                Stats(log = log, privateMode = settings.privateMode)
                 // "Your week" beside the listening it is told from, once it is turned on.
                 app.valen.ui.recap.WeekCard(coordinator = coordinator, modifier = Modifier.padding(top = Space.step8))
             }
@@ -168,6 +169,7 @@ private fun Identity(
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             // As wide as the name, so it sits in the middle and the marker goes over the name only.
             modifier = Modifier
+                .typing()
                 .width(IntrinsicSize.Max)
                 .widthIn(min = 200.dp, max = 560.dp)
                 .markerSwipe(active = typed.isNotBlank(), color = ValenColors.Container, seed = 986)
@@ -211,7 +213,7 @@ private fun Identity(
  * here, so before that the section says so instead of showing zeros.
  */
 @Composable
-private fun Stats(log: ListeningLog) {
+private fun Stats(log: ListeningLog, privateMode: Boolean) {
     KineticText(
         text = "Your listening",
         style = if (LocalChrome.current.compact) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayMedium,
@@ -221,7 +223,13 @@ private fun Stats(log: ListeningLog) {
     Spacer(Modifier.height(Space.step4))
     if (log.totalMs < 1_000) {
         Text(
-            text = "Nothing counted yet. Every song you play in Valen adds to this page: the time, your days, and what you come back to most.",
+            text = if (privateMode) {
+                "Private mode is on, so nothing is being counted. Turn it off and every song you play " +
+                    "adds to this page: the time, your days, and what you come back to most."
+            } else {
+                "Nothing counted yet. Every song you play in Valen adds to this page: the time, your " +
+                    "days, and what you come back to most."
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = ValenColors.Text2,
             modifier = Modifier.widthIn(max = 560.dp),
@@ -247,6 +255,15 @@ private fun Stats(log: ListeningLog) {
         color = ValenColors.Text2,
         modifier = Modifier.arrive(2),
     )
+    if (privateMode) {
+        Spacer(Modifier.height(Space.step3))
+        Text(
+            text = "Private mode is on: nothing new is added to this page while it is out.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = ValenColors.Text2,
+            modifier = Modifier.widthIn(max = 560.dp),
+        )
+    }
     Spacer(Modifier.height(Space.step8))
 
     Week(log = log, modifier = Modifier.arrive(3))

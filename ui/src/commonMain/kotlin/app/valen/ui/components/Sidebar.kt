@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -63,7 +65,7 @@ private val ItemGap = 2.dp
  * Navigation for wide layouts, as a pane of liquid glass that floats over the page rather than a
  * column fixed to its edge: a screen's wash runs underneath it and shows through, blurred. With
  * labels at full width; [condensed] to an icon rail in between phone and desktop. The tag signs
- * the top; the profile sits at the foot, above Settings.
+ * the top; the profile sits at the foot, above Settings and the private mode switch.
  *
  * Where you are is a droplet of brighter glass behind the item. It pours from one place to the
  * next — drawn out along the way by its speed, settling with a small overshoot — rather than
@@ -75,6 +77,8 @@ fun Sidebar(
     onNavigate: (Route) -> Unit,
     profileName: String,
     avatar: String?,
+    privateMode: Boolean,
+    onPrivateMode: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     condensed: Boolean = false,
 ) {
@@ -139,7 +143,8 @@ fun Sidebar(
                 onClick = { onNavigate(Route.Settings) },
                 droplet = true,
             )
-            // About, small, under Settings: who made this.
+            PrivateModeItem(checked = privateMode, condensed = condensed, onChange = onPrivateMode)
+            // About, small, under it: who made this.
             val aboutOn = current == Route.About
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -316,6 +321,53 @@ private fun SidebarItem(
                 maxLines = 1,
             )
         }
+    }
+}
+
+/**
+ * Private mode, within reach at the foot of the panel: while it is on, nothing about what is
+ * listened to is counted. An eye with a line through it, and the same ink-filled switch as the
+ * settings pages; in the rail it rests as the glyph alone, tinted when it is on.
+ */
+@Composable
+private fun PrivateModeItem(checked: Boolean, condensed: Boolean, onChange: (Boolean) -> Unit) {
+    val ink by animateColorAsState(
+        targetValue = if (checked) ValenColors.Primary else ValenColors.Text2,
+        animationSpec = Motion.standard(),
+        label = "privateInk",
+    )
+    if (condensed) {
+        IconTap(
+            icon = Icons.Rounded.VisibilityOff,
+            label = if (checked) "Private mode on" else "Private mode off",
+            onClick = { onChange(!checked) },
+            tint = ink,
+        )
+        return
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(Layout.hitTarget)
+            .tap(onClick = { onChange(!checked) }, shape = Radii.pillShape, role = Role.Switch)
+            .padding(start = Space.step3),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.VisibilityOff,
+            contentDescription = null,
+            tint = ink,
+            modifier = Modifier.size(22.dp),
+        )
+        Text(
+            text = "Private mode",
+            style = MaterialTheme.typography.labelLarge,
+            color = ink,
+            maxLines = 1,
+            modifier = Modifier.padding(start = Space.step3),
+        )
+        Spacer(Modifier.weight(1f))
+        Toggle(checked = checked, onChange = onChange, label = "Private mode")
     }
 }
 

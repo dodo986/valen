@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,6 +81,7 @@ fun QueueScreen(
     val queue by coordinator.queue.collectAsState()
     val index by coordinator.index.collectAsState()
     val snapshot by coordinator.nowPlaying.collectAsState()
+    val following by coordinator.keepPlaying.collectAsState()
 
     var dragKey by remember { mutableStateOf<String?>(null) }
     var dragTravel by remember { mutableStateOf(0f) }
@@ -218,7 +220,11 @@ fun QueueScreen(
                                     track = track,
                                     dimmed = false,
                                     reorderable = true,
-                                    modifier = Modifier.animateItem(placementSpec = Motion.QueueReorder).rise(i + 1),
+                                    held = dragKey == track.key,
+                                    modifier = Modifier
+                                        .zIndex(if (dragKey == track.key) 1f else 0f)
+                                        .animateItem(placementSpec = Motion.QueueReorder)
+                                        .rise(i + 1),
                                     onPlay = { scope.launch { coordinator.play(track, coordinator.queue.value) } },
                                     onRemove = {
                                         val at = coordinator.queue.value.indexOfFirst { it.key == track.key }
@@ -236,13 +242,38 @@ fun QueueScreen(
                                     dragDelta = ::dragDelta,
                                 )
                             }
-                        } else {
+                        } else if (following.isEmpty()) {
                             item(key = "queue_end") {
                                 Text(
                                     text = "Nothing after this song. Add another from search.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = ValenColors.Text2,
                                     modifier = Modifier.padding(top = if (beside) 0.dp else Space.step6, bottom = Space.step2),
+                                )
+                            }
+                        }
+
+                        // What plays on once the queue runs out: Valen's, not the queue, so it is
+                        // headed as such and cannot be dragged into it.
+                        if (following.isNotEmpty()) {
+                            item(key = "queue_following_label") {
+                                Column {
+                                    QueueSectionLabel("Then, songs like these", first = beside && upNext.isEmpty())
+                                    Text(
+                                        text = "When the queue runs out, Valen keeps playing. Songs you add go first.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = ValenColors.Text2,
+                                        modifier = Modifier.padding(bottom = Space.step2),
+                                    )
+                                }
+                            }
+                            itemsIndexed(following, key = { _, it -> "queue_following_${it.key}" }) { i, track ->
+                                QueueRow(
+                                    track = track,
+                                    dimmed = false,
+                                    modifier = Modifier.animateItem(placementSpec = Motion.QueueReorder).rise(upNext.size + i + 1),
+                                    onPlay = { scope.launch { coordinator.playFromKeepPlaying(track) } },
+                                    onRemove = { coordinator.dropFromKeepPlaying(track) },
                                 )
                             }
                         }

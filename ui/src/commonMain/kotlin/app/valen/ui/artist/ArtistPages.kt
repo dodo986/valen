@@ -691,7 +691,7 @@ private fun AboutCard(view: ArtistView) {
  * comes up in its corner.
  */
 @Composable
-private fun CoverCard(
+internal fun CoverCard(
     seed: Int,
     artwork: String?,
     title: String,

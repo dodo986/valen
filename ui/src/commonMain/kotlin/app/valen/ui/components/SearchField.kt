@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import app.valen.ui.theme.Motion
+import app.valen.ui.typing
 import app.valen.ui.theme.Radii
 import app.valen.ui.theme.Space
 import app.valen.ui.theme.ValenColors
@@ -59,6 +60,7 @@ fun SearchField(
         modifier = modifier
             .fillMaxWidth()
             .height(52.dp)
+            .typing()
             .clip(Radii.pillShape)
             .background(ValenColors.Fill)
             .border(1.dp, edge, Radii.pillShape)

@@ -50,6 +50,18 @@ object Motion {
     const val PouredOverScale = 0.965f
     const val PouredOverAlpha = 0.35f
 
+    /** A notebook's page turned onto the wall starts this far from flat (the Sound page's arrival). */
+    const val LeafDegrees = 72f
+
+    /**
+     * A part of Settings changing beside its index, like a slat of the page's shutter turning over:
+     * the open part tips away from the way you moved ([SlatOutMs]) and the next tips in from the
+     * other side ([SlatInMs], once the first is half gone), both up to [SlatDegrees].
+     */
+    const val SlatOutMs = 200
+    const val SlatInMs = 380
+    const val SlatDegrees = 24f
+
     /** Writing the tag: the whole name, stroke after stroke, at a marker's pace. */
     const val TagWriteMs = 1500
 
@@ -191,6 +203,152 @@ object Motion {
 
     /** A hold longer than this hides the story's chrome (a tap is quicker). */
     const val StoryHoldMs = 220L
+
+    /**
+     * Paper slapped on: a page or poster arrives this much bigger and this far turned, and is
+     * slapped flat on the kinetic curve over [SlapMs]; going back lifts the top one away, growing
+     * to [LiftScale] as it goes ([ExitMs]).
+     */
+    const val SlapMs = KineticMs + 80
+    const val SlapScale = 1.12f
+    const val SlapDegrees = 3f
+    const val LiftScale = 1.06f
+
+    /**
+     * A poster on the wall (the stage, the Home hero) is slapped harder than a story's page: it
+     * comes from further out and more turned, so a song change reads from across the room.
+     */
+    const val PosterSlapScale = 1.2f
+    const val PosterSlapDegrees = 5f
+
+    /**
+     * The poster it covers is not simply buried: the tape at one of its top corners lets go, it
+     * swings down from the other on a pendulum's ease (up to [TearDegrees]) and drops off the wall
+     * over [TearMs]. The new one is slapped on [TearLeadMs] after the tape gives, so the swing is
+     * seen first. Going back peels the top poster up and away ([PeelDegrees], [PeelRise] of its
+     * height) to show the earlier one.
+     */
+    const val TearMs = 680
+    const val TearLeadMs = 150L
+    const val TearDegrees = 24f
+    const val PeelDegrees = 7f
+    const val PeelRise = 0.1f
+
+    /**
+     * A new cover's colour floods out into the room from the cover itself, like paint poured on
+     * the wall behind it ([RepaintMs], the enter curve), a band of the new colour's paint
+     * [RepaintLead] of the way ahead of the light it brings, with runs reaching out further.
+     */
+    const val RepaintMs = 1150
+    const val RepaintLead = 0.03f
+
+    /** A new cover's tones are waited for this long before the default family is taken instead. */
+    const val ToneWaitMs = 1200L
+
+    /**
+     * The lights go down while the song is paused: the wash dims to [PausedLight] over
+     * [LightsDownMs] and comes back up quicker ([LightsUpMs]) when it plays.
+     */
+    const val PausedLight = 0.42f
+    const val LightsDownMs = 900
+    const val LightsUpMs = 520
+
+    /**
+     * Added to the queue: the song's cover leaves its row as a drop and arcs into the queue's door
+     * (the dock's queue glyph, the phone's mini player) over [FlightMs], shrinking to [FlightEndDp]
+     * and rounding into a bead; it lifts [FlightArcDp] above the straight line at its height.
+     */
+    const val FlightMs = 640
+
+    /** The drop swells this much toward the top of its arc before it is drawn into a bead. */
+    const val FlightSwell = 1.35f
+    val Flight: Easing = CubicBezierEasing(0.45f, 0f, 0.25f, 1f)
+    val FlightEndDp = 12.dp
+    val FlightArcDp = 120.dp
+
+    /**
+     * Scrubbing the stage's rail raises a drop of the paint above the finger with the time in it.
+     * The drop follows on the droplet's slow spring while its neck stays on the rail's head, so it
+     * leans and stretches as it is dragged; let go, it falls back into the rail.
+     */
+    val DropRise = 18.dp
+
+    /**
+     * A new cover is slapped on only once its picture is there (a grey sheet slapped up and then
+     * filled in reads as a fault); past this wait it goes up anyway.
+     */
+    const val PosterWaitMs = 900L
+
+    /**
+     * Paint on a rail (seek, volume) runs to a new place on [run] when the value jumps (a tap,
+     * a new song) rather than teleporting; under [RunFrom] of the rail it simply follows. While it
+     * runs, a bead of paint gathers at its head, up to [BeadSwell] of the rail's thickness wider.
+     */
+    fun <T> run(): SpringSpec<T> = SpringSpec(stiffness = 320f, dampingRatio = 0.8f)
+    const val RunFrom = 0.015f
+    const val BeadSwell = 0.9f
+
+    /** A rail's speed (rail lengths a second) at which the bead is at its widest. */
+    const val BeadSpeed = 3.2f
+
+    /**
+     * After a seek the rail and the times stay where they were put until the player reports that
+     * place (ffplay restarts, a page answers), at most this long: they used to flick back first.
+     */
+    const val SeekHoldMs = 2500L
+
+    /** Within this much of the place asked for, the player's own position is taken again. */
+    const val SeekNearMs = 1500L
+
+    /**
+     * A pointer resting on a rail this long makes the times beside it read where a click would
+     * land; crossing it on the way to something else changes nothing.
+     */
+    const val PreviewHoverMs = 140L
+
+    /**
+     * Waiting for a song: a drop goes round a ring, its two ends on the droplet's springs
+     * ([liquidLead], [liquidTrail]), so it stretches out and gathers into a bead each step.
+     * The place it reaches for moves on by [WaitStep] of a turn every [WaitStepMs].
+     */
+    const val WaitStepMs = 400L
+    const val WaitStep = 0.36f
+
+    /** Under reduced motion the wait is a short arc turning once in this long, steadily. */
+    const val WaitReducedTurnMs = 1400f
+
+    /** Skip glyphs kick toward where they lead when pressed, this far, and spring back. */
+    val KickDistance = 6.dp
+    const val KickMs = 90
+
+    /**
+     * Something dropped into the queue: the dock's queue glyph swallows it on the jelly spring,
+     * swelling this much first.
+     */
+    const val SwallowScale = 1.32f
+
+    /**
+     * The phone's mini player pulled sideways: its glass stretches like a drop drawn out (up to
+     * [SwipeStretch] longer, half that thinner) and its song follows the finger; let go past
+     * [SwipeCommit] of its width (or flung), it skips that way — left for the next song, right
+     * for the one before — and the new song slides in from the other side.
+     */
+    const val SwipeCommit = 0.26f
+    const val SwipeStretch = 0.07f
+
+    /** A flick this fast (dp a second) skips however short it was. */
+    const val SwipeFlingDp = 900f
+
+    /** After a swipe the capsule waits, empty, this long at most for the next song to show. */
+    const val SwipeWaitMs = 1200L
+
+    /** A row held by its handle comes off the wall like paper: this much bigger, this far turned. */
+    const val HeldScale = 1.025f
+    const val HeldDegrees = 0.9f
+
+    /** A tick drawn on a confirmation, at a pen's pace, after the toast has poured out. */
+    const val TickMs = 360
+    const val TickDelayMs = 140
 
     /** Reduced motion: short fades, no travel. */
     const val ReducedMs = 120

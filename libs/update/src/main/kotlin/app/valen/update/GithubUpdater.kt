@@ -318,15 +318,17 @@ class GithubUpdater(
             return
         }
         _state.value = UpdateState.Installing(release)
-        publish(when (val outcome = installer.install(fileFor(release), release)) {
+        when (val outcome = installer.install(fileFor(release), release)) {
             UpdateInstaller.Outcome.InPlace -> {
                 memory = memory.copy(inPlace = release.code)
                 saveMemory()
-                UpdateState.Installed(release)
+                publish(UpdateState.Installed(release))
             }
-            UpdateInstaller.Outcome.HandedOver -> UpdateState.Installing(release)
-            is UpdateInstaller.Outcome.Failed -> UpdateState.Failed(outcome.reason, release)
-        })
+            // The system's installer can answer while it is being handed the file (a quick Cancel
+            // or a refusal): its answer is the newer one and must stand, not go back to "installing".
+            UpdateInstaller.Outcome.HandedOver -> Unit
+            is UpdateInstaller.Outcome.Failed -> publish(UpdateState.Failed(outcome.reason, release))
+        }
     }
 
     private fun download(release: AppRelease, file: File) {

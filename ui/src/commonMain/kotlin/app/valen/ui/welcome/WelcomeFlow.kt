@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.welcome
 
+import app.valen.ui.typing
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -239,6 +240,7 @@ private fun NameStep(name: String, onName: (String) -> Unit) {
         cursorBrush = SolidColor(ValenColors.Primary),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
         modifier = Modifier
+            .typing()
             .fillMaxWidth()
             .markerSwipe(active = name.isNotBlank(), color = ValenColors.Container, seed = 7)
             .arrive(2),

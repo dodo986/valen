@@ -99,18 +99,91 @@ class PlaybackCoordinatorTest {
     }
 
     @Test
-    fun `the last track pauses instead of wrapping when it ends`() = runTest {
+    fun `with keep playing off, the last track pauses instead of wrapping when it ends`() = runTest {
         val spotify = FakeProvider(ProviderId.SPOTIFY)
         val coordinator = PlaybackCoordinator(listOf(spotify), backgroundScope, settings())
+        coordinator.setKeepPlaying(false)
 
         val a = track(ProviderId.SPOTIFY, "a")
         val b = track(ProviderId.SPOTIFY, "b")
         coordinator.play(a, listOf(a, b))
         coordinator.next()
+        runCurrent()
         coordinator.next(auto = true)
 
         assertEquals(1, coordinator.index.value)
         assertEquals(false, spotify.playing)
+        assertEquals(listOf(a, b), coordinator.queue.value)
+        assertTrue(coordinator.keepPlaying.value.isEmpty(), "nothing is looked for while it is off")
+    }
+
+    /** A service whose every search finds five songs not seen before, all by "Artist". */
+    private class EndlessProvider : MusicProvider by FakeProvider(ProviderId.SPOTIFY) {
+        val inner = FakeProvider(ProviderId.SPOTIFY)
+        var batch = 0
+        override val player = inner.player
+        override suspend fun play(track: Track, startMs: Long) = inner.play(track, startMs)
+        override suspend fun search(query: String, limit: Int): List<Track> {
+            val b = ++batch
+            return (1..5).map { Track(ProviderId.SPOTIFY, "k$b-$it", "Found $b song $it", "Artist", durationMs = 180_000) }
+        }
+    }
+
+    @Test
+    fun `when the queue runs out, songs like it play on, after anything added meanwhile`() = runTest {
+        val spotify = EndlessProvider()
+        val written = StringBuilder()
+        val store = SettingsStore(read = { written.toString().ifEmpty { null } }, write = { written.clear(); written.append(it) })
+        val coordinator = PlaybackCoordinator(listOf(spotify), backgroundScope, store)
+        val a = track(ProviderId.SPOTIFY, "a")
+        val b = track(ProviderId.SPOTIFY, "b")
+        coordinator.play(a, listOf(a, b))
+        runCurrent()
+        // One song left after the playing one: what follows is found now, and is not the queue.
+        assertTrue(coordinator.keepPlaying.value.isNotEmpty(), "songs found to follow the queue")
+        assertEquals(listOf(a, b), coordinator.queue.value)
+
+        // A song added now goes before them.
+        val c = track(ProviderId.SPOTIFY, "c")
+        coordinator.enqueue(c)
+        coordinator.next(); runCurrent()
+        coordinator.next(auto = true); runCurrent()
+        assertEquals(c, coordinator.queue.value[coordinator.index.value])
+        val following = coordinator.keepPlaying.value
+        assertTrue(following.isNotEmpty(), "found again for the queue's new end")
+
+        // c ends: the music goes on with them.
+        coordinator.next(auto = true); runCurrent()
+        assertEquals(listOf(a, b, c), coordinator.queue.value.take(3))
+        assertEquals(3, coordinator.index.value)
+        assertEquals(following.first(), spotify.inner.played)
+        assertTrue(spotify.inner.playing)
+        assertEquals(following.map { it.key }, coordinator.queue.value.drop(3).map { it.key })
+        assertTrue(coordinator.queue.value.distinctBy { recordingKey(it.title, it.artist) }.size == coordinator.queue.value.size, "no song twice")
+        // They are Valen's, not chosen, and a restart still knows it.
+        assertEquals(following.map { it.key }, store.load().session?.offered)
+    }
+
+    @Test
+    fun `a queue that repeats looks for nothing to follow it, and a tapped follower plays at once`() = runTest {
+        val spotify = EndlessProvider()
+        val coordinator = PlaybackCoordinator(listOf(spotify), backgroundScope, settings())
+        val a = track(ProviderId.SPOTIFY, "a")
+        coordinator.setRepeat(RepeatMode.ALL)
+        coordinator.play(a)
+        runCurrent()
+        assertTrue(coordinator.keepPlaying.value.isEmpty(), "a repeating queue never runs out")
+
+        coordinator.setRepeat(RepeatMode.OFF)
+        runCurrent()
+        val found = coordinator.keepPlaying.value
+        assertTrue(found.size >= 3, "found once it can run out: $found")
+
+        coordinator.playFromKeepPlaying(found[2])
+        runCurrent()
+        assertEquals(listOf(a) + found, coordinator.queue.value)
+        assertEquals(3, coordinator.index.value)
+        assertEquals(found[2], spotify.inner.played)
     }
 
     @Test
@@ -384,6 +457,50 @@ class PlaybackCoordinatorTest {
         assertEquals(AppSettings(), coordinator.settings.value)
         assertEquals(false, SettingsStore(read = { stored }, write = {}).load().onboarded)
         assertEquals(0L, coordinator.stats.log.value.totalMs)
+    }
+
+    @Test
+    fun `private mode counts no listening and holds no skip, and the switch is kept`() = runTest {
+        var stored: String? = null
+        val store = SettingsStore(read = { stored }, write = { stored = it })
+        val spotify = FakeProvider(ProviderId.SPOTIFY)
+        // The test's virtual clock, so a tick adds exactly the time the scheduler was advanced: on a
+        // real clock a fast machine could run every tick inside one millisecond and count nothing.
+        val coordinator = PlaybackCoordinator(
+            listOf(spotify),
+            backgroundScope,
+            store,
+            clock = { testScheduler.currentTime },
+        )
+        val a = track(ProviderId.SPOTIFY, "a")
+        val b = track(ProviderId.SPOTIFY, "b")
+
+        // What was counted before the switch stays; nothing after it is added.
+        coordinator.stats.count(a, 3_000, "Night drive")
+        coordinator.setPrivateMode(true)
+        assertEquals(true, SettingsStore(read = { stored }, write = {}).load().privateMode)
+
+        coordinator.play(a, listOf(a, b))
+        testScheduler.advanceTimeBy(2_000)
+        testScheduler.runCurrent()
+        coordinator.stats.flush()
+        assertEquals(3_000L, coordinator.stats.log.value.totalMs, "private mode added no listening")
+
+        // Leaving it in its first seconds is not held against it either.
+        coordinator.next()
+        testScheduler.advanceTimeBy(1_000)
+        testScheduler.runCurrent()
+        assertEquals(emptyMap<String, Int>(), coordinator.stats.log.value.skips)
+
+        // Off again, the same listening counts and an early skip is held.
+        coordinator.setPrivateMode(false)
+        testScheduler.advanceTimeBy(2_000)
+        testScheduler.runCurrent()
+        coordinator.stats.flush()
+        assertEquals(5_000L, coordinator.stats.log.value.totalMs, "listening counts again")
+        coordinator.next()
+        assertEquals(1, coordinator.stats.log.value.skips[b.key])
+        assertEquals(false, SettingsStore(read = { stored }, write = {}).load().privateMode)
     }
 
     @Test
@@ -880,4 +997,82 @@ class PlaybackCoordinatorTest {
         assertTrue(coordinator.queue.value.size >= 1, "the radio starts from its seed")
         assertEquals(true, saved.load().session?.generated, "a radio queue is Valen's, so it is saved as generated")
     }
+
+    @Test
+    fun `a service that has not moved yet never puts its last song back on show`() = runTest {
+        // A service that answers play() at once but shows the new song only later, like a page or
+        // a stream still opening; until then its own state still names what it played before.
+        val slow = LaggingProvider(ProviderId.SOUNDCLOUD)
+        val coordinator = PlaybackCoordinator(listOf(slow), backgroundScope, settings())
+        val a = track(ProviderId.SOUNDCLOUD, "a")
+        val b = track(ProviderId.SOUNDCLOUD, "b")
+        coordinator.play(a, listOf(a, b))
+        slow.show(a)
+        testScheduler.advanceTimeBy(300)
+        testScheduler.runCurrent()
+        assertEquals(a.key, coordinator.snapshot.value?.track?.key)
+
+        coordinator.next()
+        // Ticks pass while the service still shows the song before: the new one stays on show.
+        repeat(4) {
+            testScheduler.advanceTimeBy(260)
+            testScheduler.runCurrent()
+            assertEquals(b.key, coordinator.snapshot.value?.track?.key, "the old song came back on show")
+        }
+        // The service moves: its own state is taken again, playing.
+        slow.show(b)
+        testScheduler.advanceTimeBy(260)
+        testScheduler.runCurrent()
+        assertEquals(b.key, coordinator.snapshot.value?.track?.key)
+        assertTrue(coordinator.snapshot.value?.isPlaying == true)
+    }
+
+    @Test
+    fun `the service's own description of the song asked for never replaces it on screen`() = runTest {
+        val slow = LaggingProvider(ProviderId.SPOTIFY)
+        val coordinator = PlaybackCoordinator(listOf(slow), backgroundScope, settings())
+        val asked = Track(
+            provider = ProviderId.SPOTIFY, id = "a", title = "Song", artist = "Artist",
+            artworkUrl = "https://img/640", durationMs = 180_000, uri = "uri:a",
+        )
+        coordinator.play(asked, listOf(asked))
+        // The Web Player describes it with a cover of another size...
+        slow.show(asked.copy(artworkUrl = "https://img/300"))
+        testScheduler.advanceTimeBy(300)
+        testScheduler.runCurrent()
+        assertEquals(asked, coordinator.snapshot.value?.track)
+        // ...or as a regional copy with an id of its own: still the song that was asked for.
+        slow.show(asked.copy(id = "relinked", uri = "uri:relinked", artworkUrl = "https://img/300"))
+        testScheduler.advanceTimeBy(300)
+        testScheduler.runCurrent()
+        assertEquals(asked, coordinator.snapshot.value?.track)
+        // A different song is the service's own.
+        val other = Track(provider = ProviderId.SPOTIFY, id = "b", title = "Other", artist = "Artist", uri = "uri:b")
+        slow.show(other)
+        testScheduler.advanceTimeBy(300)
+        testScheduler.runCurrent()
+        assertEquals(other.key, coordinator.snapshot.value?.track?.key)
+    }
+}
+
+/** Takes play() but changes what it shows only when told to ([show]). */
+private class LaggingProvider(override val id: ProviderId) : MusicProvider {
+    override val session = MutableStateFlow<SessionState>(SessionState.Connected("test"))
+    override val player = MutableStateFlow<PlayerSnapshot?>(null)
+    override val events = MutableSharedFlow<ProviderEvent>()
+
+    fun show(track: Track) {
+        player.value = PlayerSnapshot(track = track, isPlaying = true, durationMs = track.durationMs)
+    }
+
+    override suspend fun connect() {}
+    override suspend fun disconnect() {}
+    override suspend fun search(query: String, limit: Int): List<Track> = emptyList()
+    override suspend fun play(track: Track, startMs: Long) {}
+    override suspend fun pause() { player.value = player.value?.copy(isPlaying = false) }
+    override suspend fun resume() { player.value = player.value?.copy(isPlaying = true) }
+    override suspend fun seek(positionMs: Long) {}
+    override suspend fun setVolume(volume: Float) {}
+    override suspend fun prepare(track: Track) {}
+    override suspend fun close() {}
 }

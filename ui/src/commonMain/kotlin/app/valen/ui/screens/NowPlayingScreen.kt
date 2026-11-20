@@ -79,6 +79,10 @@ import app.valen.ui.components.pasted
 import app.valen.ui.components.rememberInteraction
 import androidx.compose.foundation.hoverable
 import app.valen.ui.components.tilt
+import app.valen.ui.components.Posters
+import app.valen.ui.components.repaintFrom
+import app.valen.ui.components.PosterEntry
+import app.valen.ui.components.rememberWentBack
 import app.valen.ui.components.QuietButton
 import app.valen.ui.components.SeekBar
 import app.valen.ui.components.TransportBar
@@ -131,8 +135,13 @@ fun NowPlayingScreen(
     val queue by coordinator.queue.collectAsState()
     val index by coordinator.index.collectAsState()
     val track = snapshot?.track
-    val tones = ArtworkPalette.tones(track?.artworkUrl)
+    // Held at the last cover's until the new one is measured: the room goes straight from one
+    // song's colour to the next, poured out from the cover.
+    val tones = app.valen.ui.artwork.rememberSettledTones(track?.artworkUrl)
+    val spot = remember { app.valen.ui.components.RepaintSpot() }
     val next = if (index >= 0) queue.getOrNull(index + 1) else null
+    // Whether the song on show was reached by going back: the old poster then lifts off it.
+    val back = rememberWentBack(track?.key, index, queue)
     val library = playlists?.library
     val kept by remember(library) { library?.playlists ?: MutableStateFlow(emptyList<Playlist>()) }.collectAsState()
     val liked = track != null && kept.firstOrNull { it.isLiked }?.tracks?.any { it.key == track.key } == true
@@ -178,8 +187,12 @@ fun NowPlayingScreen(
             tones = tones,
             drift = snapshot?.isPlaying == true,
             fade = 0.72f,
+            spot = spot,
+            // The lights go down while the song is paused (not while it is only loading).
+            lit = snapshot?.isPlaying == true || snapshot?.isBuffering == true,
             modifier = Modifier.fillMaxSize(),
         )
+        androidx.compose.runtime.CompositionLocalProvider(app.valen.ui.components.LocalRepaintSpot provides spot) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -210,6 +223,7 @@ fun NowPlayingScreen(
                     onOpenQueue = onOpenQueue,
                     stageWidth = maxWidth,
                     stageHeight = maxHeight,
+                    back = back,
                 )
 
                 else -> TallStage(
@@ -224,6 +238,7 @@ fun NowPlayingScreen(
                     stageHeight = maxHeight,
                     showVolume = !chrome.compact,
                     topInset = if (onClose != null) Space.step12 else Space.step6,
+                    back = back,
                 )
             }
             if (track != null) {
@@ -272,6 +287,7 @@ fun NowPlayingScreen(
                 )
             }
         }
+        }
     }
 }
 
@@ -314,6 +330,7 @@ private fun SideStage(
     onOpenQueue: () -> Unit,
     stageWidth: Dp,
     stageHeight: Dp,
+    back: Boolean,
 ) {
     val gutter = LocalChrome.current.gutter
     val reduced = LocalReducedMotion.current
@@ -339,20 +356,12 @@ private fun SideStage(
             .fillMaxSize()
             .padding(horizontal = gutter, vertical = Space.step8),
     ) {
-        val coverSource = rememberInteraction()
-        Artwork(
-            url = track.artworkUrl,
-            shape = Radii.artworkShape,
-            contentDescription = track.title,
-            measure = true,
+        StagePoster(
+            track = track,
+            back = back,
+            playing = snapshot?.isPlaying == true,
             iconSize = 64.dp,
-            modifier = Modifier
-                .size(cover)
-                .hoverable(coverSource)
-                .pasted(seed = track.key.hashCode(), source = coverSource)
-                .breathe(snapshot?.isPlaying == true)
-                .tilt()
-                .taped(track.key),
+            modifier = Modifier.size(cover),
         )
         Spacer(Modifier.width(gap))
         AnimatedContent(
@@ -422,6 +431,7 @@ private fun TallStage(
     stageHeight: Dp,
     showVolume: Boolean,
     topInset: Dp,
+    back: Boolean,
 ) {
     val gutter = LocalChrome.current.gutter
     val reduced = LocalReducedMotion.current
@@ -485,21 +495,14 @@ private fun TallStage(
                         .heightIn(min = stageHeight)
                         .padding(top = topInset, bottom = Space.step6),
                 ) {
-                    val coverSource = rememberInteraction()
-                    Artwork(
-                        url = track.artworkUrl,
-                        shape = Radii.artworkShape,
-                        contentDescription = track.title,
-                        measure = true,
+                    StagePoster(
+                        track = track,
+                        back = back,
+                        playing = snapshot?.isPlaying == true,
                         iconSize = 56.dp,
                         modifier = Modifier
                             .size(cover)
-                            .align(Alignment.CenterHorizontally)
-                            .hoverable(coverSource)
-                            .pasted(seed = track.key.hashCode(), source = coverSource)
-                            .breathe(snapshot?.isPlaying == true)
-                            .tilt()
-                            .taped(track.key),
+                            .align(Alignment.CenterHorizontally),
                     )
                     Spacer(Modifier.height(Space.step8))
                     StageWords(track = track, isPlaying = snapshot?.isPlaying == true, large = false, heart = controls.heart)
@@ -522,6 +525,44 @@ private fun TallStage(
                 }
             }
         }
+    }
+}
+
+/**
+ * The stage's cover: pasted to the wall and taped, leaning toward the pointer, sitting back while
+ * paused. A new song's cover is slapped on over the last one; going back lifts it off again.
+ */
+@Composable
+private fun StagePoster(track: Track, back: Boolean, playing: Boolean, iconSize: Dp, modifier: Modifier = Modifier) {
+    val coverSource = rememberInteraction()
+    val spot = app.valen.ui.components.LocalRepaintSpot.current
+    Posters(
+        item = track,
+        key = { it.key },
+        // A song with the same cover (an album played through) keeps the poster up and only
+        // re-tapes it: an identical sheet is never torn down.
+        same = { a, b -> a.artworkUrl != null && a.artworkUrl == b.artworkUrl },
+        back = back,
+        modifier = modifier
+            .then(if (spot != null) Modifier.repaintFrom(spot) else Modifier)
+            .hoverable(coverSource)
+            .breathe(playing)
+            .tilt(),
+    ) { shown, entry, onReady ->
+        Artwork(
+            url = shown.artworkUrl,
+            shape = Radii.artworkShape,
+            contentDescription = shown.title,
+            // Only the song that plays tints the room; the poster under it is on its way out.
+            measure = shown.key == track.key,
+            animate = entry == PosterEntry.First,
+            onReady = onReady,
+            iconSize = iconSize,
+            modifier = Modifier
+                .fillMaxSize()
+                .pasted(seed = shown.key.hashCode(), source = coverSource)
+                .taped(shown.key, already = entry == PosterEntry.Returned),
+        )
     }
 }
 

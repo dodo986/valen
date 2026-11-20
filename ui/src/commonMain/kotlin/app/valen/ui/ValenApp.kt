@@ -32,6 +32,10 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.ui.platform.LocalFocusManager
+import app.valen.core.RepeatMode
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.valen.core.PlaybackCoordinator
+import kotlinx.coroutines.flow.map
 import app.valen.core.PlaylistManager
 import app.valen.ui.artwork.ArtworkPalette
 import app.valen.ui.artwork.LocalPlayingTones
@@ -56,10 +61,13 @@ import app.valen.ui.components.Backdrop
 import app.valen.ui.components.LocalBackdrop
 import app.valen.ui.components.LocalPageEntrance
 import app.valen.ui.components.backdropSource
-import app.valen.ui.components.PageArrival
 import app.valen.ui.components.arrivalFor
 import app.valen.ui.components.drawArrival
-import app.valen.ui.components.slapped
+import app.valen.ui.components.arriving
+import app.valen.ui.components.Reach
+import app.valen.ui.components.noteReach
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.geometry.Offset
 import app.valen.ui.components.rememberPageEntrance
 import app.valen.ui.components.wallGrain
@@ -171,6 +179,8 @@ fun ValenApp(
     pageMemory: PageMemory = remember { PageMemory() },
     /** "Your week"; the screenshot run passes its own to open it. */
     recap: RecapState = remember { RecapState() },
+    /** The window's keyboard, where there is one to speak of: the desktop hands its window's keys in. */
+    keys: KeyShortcuts? = null,
 ) {
     ValenTheme(reducedMotion = systemReducedMotion()) {
         val scope = rememberCoroutineScope()
@@ -181,7 +191,7 @@ fun ValenApp(
         val followCover = settings.coverColour
         // Set before anything reads a tone this frame, so the first frame is already right.
         ArtworkPalette.followCover = followCover
-        val tones = ArtworkPalette.tones(playing?.track?.artworkUrl)
+        val tones = app.valen.ui.artwork.rememberSettledTones(playing?.track?.artworkUrl)
         // The whole app is one colour: pink on black by default, or the playing cover's. It eases
         // to a new one rather than jumping.
         val seed by animateColorAsState(tones.accent, Motion.tint(), label = "seed")
@@ -201,6 +211,11 @@ fun ValenApp(
         }
         // Another place opened over them takes the pages away: their stack goes with them.
         LaunchedEffect(nav.over) { if (Route.Artist !in nav.over) browser.forget() }
+        // The keys page (`?`), and what every key does.
+        val keysShown = remember { mutableStateOf(false) }
+        // Before the app scope is provided below: it is handed in rather than read.
+        if (keys != null) KeyCommands(keys, coordinator, playlists, nav, search, browser, keysShown, scope)
+        val focusManager = LocalFocusManager.current
         // Where every page was left (above the width switch, so a resize keeps it too): [pageMemory].
         CompositionLocalProvider(
             LocalAppScope provides scope,
@@ -212,17 +227,21 @@ fun ValenApp(
             LocalRecap provides recap,
             app.valen.ui.update.LocalUpdateSheet provides remember { app.valen.ui.update.UpdateSheetState() },
             app.valen.ui.components.LocalWarm provides remember(coordinator) { { t: app.valen.core.Track -> coordinator.warm(t) } },
+            app.valen.ui.components.LocalFlights provides remember { app.valen.ui.components.Flights() },
         ) {
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(ValenColors.Background),
+                    .background(ValenColors.Background)
+                    .blurOnOutsideClick(focusManager)
+                    .noteReach(),
             ) {
                 when {
                     maxWidth >= Layout.wideFrom -> WideApp(coordinator, playlists, nav, search, rail = false)
                     maxWidth >= Layout.railFrom -> WideApp(coordinator, playlists, nav, search, rail = true)
                     else -> PhoneApp(coordinator, playlists, nav, search)
                 }
+                KeysPage(visible = keysShown.value, onDismiss = { keysShown.value = false })
                 // "Your week", over everything (chrome too) while it is told.
                 WeekStoryHost(coordinator = coordinator, playlists = playlists)
                 // The welcome, once, over everything until it is done; it fades up and away.
@@ -235,6 +254,91 @@ fun ValenApp(
                 }
             }
         }
+    }
+}
+
+/**
+ * What each key does here ([KeyShortcuts], [Shortcut]): the transport and the volume on the
+ * keyboard, and every place a key away. A shortcut that changes something you might not be looking
+ * at (shuffle, repeat, mute, a like) says so in a notice; the ones you can see happen (seeking, the
+ * volume, a place opening) need no word.
+ */
+@Composable
+private fun KeyCommands(
+    keys: KeyShortcuts,
+    coordinator: PlaybackCoordinator,
+    playlists: PlaylistManager,
+    nav: Nav,
+    search: SearchState,
+    browser: Browser,
+    keysShown: MutableState<Boolean>,
+    scope: CoroutineScope,
+) {
+    val focus = LocalFocusManager.current
+    val steps = remember(coordinator, scope) { KeySteps(coordinator, scope) }
+    DisposableEffect(keys, coordinator, nav, search, browser, steps, focus) {
+        keys.perform = perform@{ shortcut ->
+            val settings = coordinator.settings.value
+            // The welcome has the keyboard to itself: it asks for a name.
+            if (!settings.onboarded) return@perform false
+            val track = coordinator.nowPlaying.value?.track
+            when (shortcut) {
+                Shortcut.Back -> when {
+                    // Esc in a field lets go of it, so the next key plays rather than types.
+                    Typing.active -> focus.clearFocus()
+                    keysShown.value -> keysShown.value = false
+                    else -> when (val top = nav.over.lastOrNull()) {
+                        null -> return@perform false
+                        // The catalogue's pages go back one page at a time before they close.
+                        Route.Artist -> browser.back()
+                        else -> nav.close(top)
+                    }
+                }
+                Shortcut.Help -> keysShown.value = !keysShown.value
+                Shortcut.PlayPause -> scope.launch { coordinator.toggle() }
+                Shortcut.Next -> scope.launch { coordinator.next() }
+                Shortcut.Previous -> scope.launch { coordinator.previous() }
+                Shortcut.SeekForward -> return@perform steps.seekBy(KeySteps.SeekStepMs)
+                Shortcut.SeekBack -> return@perform steps.seekBy(-KeySteps.SeekStepMs)
+                Shortcut.VolumeUp -> steps.volumeBy(KeySteps.VolumeStep)
+                Shortcut.VolumeDown -> steps.volumeBy(-KeySteps.VolumeStep)
+                Shortcut.Mute -> coordinator.confirm(if (steps.mute()) "Muted" else "Unmuted")
+                Shortcut.Like -> {
+                    val song = track ?: return@perform false
+                    scope.launch {
+                        val liked = playlists.library.toggleLiked(song)
+                        coordinator.confirm(if (liked) "Added to Liked songs" else "Removed from Liked songs")
+                    }
+                }
+                Shortcut.Shuffle -> {
+                    val on = !settings.shuffle
+                    coordinator.setShuffle(on)
+                    coordinator.confirm(if (on) "Shuffle on" else "Shuffle off")
+                }
+                Shortcut.Repeat -> {
+                    coordinator.cycleRepeat()
+                    coordinator.confirm(
+                        when (coordinator.settings.value.repeat) {
+                            RepeatMode.OFF -> "Repeat off"
+                            RepeatMode.ALL -> "Repeat all"
+                            RepeatMode.ONE -> "Repeat one"
+                        },
+                    )
+                }
+                Shortcut.Search -> {
+                    nav.open(Route.Search)
+                    search.focusAsk++
+                }
+                Shortcut.Stage -> when {
+                    nav.top == Route.NowPlaying -> nav.close(Route.NowPlaying)
+                    track != null -> nav.open(Route.NowPlaying)
+                    else -> return@perform false
+                }
+                Shortcut.Queue -> if (nav.top == Route.Queue) nav.close(Route.Queue) else nav.open(Route.Queue)
+            }
+            true
+        }
+        onDispose { keys.perform = null }
     }
 }
 
@@ -252,6 +356,8 @@ private fun WideApp(
     val settings by coordinator.settings.collectAsState()
     val notice by coordinator.notice.collectAsState()
     val confirmation by coordinator.noticeIsConfirmation.collectAsState()
+    // Read only by the dock's queue glyph, so a queue change recomposes that glyph alone.
+    val queueSize = remember(coordinator) { coordinator.queue.map { it.size } }.collectAsState(coordinator.queue.value.size)
     val track = snapshot?.track
     val route = nav.top
 
@@ -297,6 +403,8 @@ private fun WideApp(
             onNavigate = nav::open,
             profileName = settings.profileName,
             avatar = settings.avatar,
+            privateMode = settings.privateMode,
+            onPrivateMode = coordinator::setPrivateMode,
             condensed = rail,
             modifier = Modifier
                 .align(Alignment.CenterStart)
@@ -327,6 +435,7 @@ private fun WideApp(
                 onSeek = { position -> scope.launch { coordinator.seek(position) } },
                 onVolume = { value -> scope.launch { coordinator.setVolume(value) } },
                 onQueue = { nav.open(Route.Queue) },
+                queueSize = { queueSize.value },
                 modes = PlayModes(
                     shuffle = settings.shuffle,
                     repeat = settings.repeat,
@@ -363,6 +472,8 @@ private fun WideApp(
                 .align(Alignment.TopCenter)
                 .padding(start = chrome.start + gutter, end = gutter, top = Space.step4),
         )
+        // Songs added to the queue, flying into the dock.
+        app.valen.ui.components.FlightHost(app.valen.ui.components.LocalFlights.current)
         }
     }
 }
@@ -441,6 +552,7 @@ private fun PhoneApp(
                     onOpen = { nav.open(Route.NowPlaying) },
                     onToggle = { scope.launch { coordinator.toggle() } },
                     onNext = { scope.launch { coordinator.next() } },
+                    onPrevious = if (snapshot?.canSkip != false) ({ scope.launch { coordinator.previous() } }) else null,
                 )
             }
             BottomNav(current = nav.top, onNavigate = nav::open)
@@ -454,6 +566,8 @@ private fun PhoneApp(
                 .align(Alignment.TopCenter)
                 .padding(horizontal = Layout.chromeInset, vertical = Space.step2),
         )
+        // Songs added to the queue, flying into the mini player.
+        app.valen.ui.components.FlightHost(app.valen.ui.components.LocalFlights.current)
         }
 
         CompositionLocalProvider(LocalChrome provides sheet) {
@@ -528,10 +642,11 @@ private fun PhoneApp(
 }
 
 /**
- * One screen replacing another in the same place. Each place arrives its own way ([arrivalFor]):
- * poured down like paint, sprayed out, rolled across, a shutter rolled up, slapped on like a
- * poster, or switched on like a tube — while the old one sinks back and darkens under it; then its rows and cards rise in one after another ([rise]). Under reduced
- * motion it is a short cross-fade.
+ * One screen replacing another in the same place. Each place arrives its own way ([arrivalFor]),
+ * a little differently each visit: poured, sprayed, burst, rolled, taped up, unrolled, printed,
+ * a shutter rolled up, slapped on, a page turned over, a tube switched on. The old page runs its own
+ * arrival backwards and sinks under it; then the new page's rows and cards rise in one after
+ * another ([arrive]). Under reduced motion it is a short cross-fade.
  */
 @Composable
 private fun Pages(route: Route, content: @Composable (Route) -> Unit) {
@@ -555,23 +670,39 @@ private fun Pages(route: Route, content: @Composable (Route) -> Unit) {
     ) { shown ->
         val first = remember { pours == 0 }
         val seed = remember { ++pours }
+        // A page that was still arriving when another took its place rewinds the same arrival as it
+        // leaves (the same tool, the same curve, the same 620 ms), so two half-arrived pages never
+        // sit painted over one another; one that had settled stays painted under the new paint.
+        val arrived = remember { mutableStateOf(false) }
         val pour by transition.animateFloat(
             transitionSpec = { if (reduced) Motion.fade() else Motion.pour() },
             label = "pour",
-        ) { state -> if (state == EnterExitState.Visible || reduced || first) 1f else 0f }
+        ) { state ->
+            when {
+                reduced || first -> 1f
+                state == EnterExitState.PreEnter -> 0f
+                state == EnterExitState.PostExit && !arrived.value -> 0f
+                else -> 1f
+            }
+        }
+        LaunchedEffect(pour) { if (pour >= 1f) arrived.value = true }
         val entrance = rememberPageEntrance(shown)
         val paint = LocalPlayingTones.current.bright
+        // The press that opened this page, if one did (a click or a tap, not a key): in the window.
+        val reached = remember { Reach.recent() }
+        var at by remember { mutableStateOf(Offset.Zero) }
         CompositionLocalProvider(LocalPageEntrance provides entrance) {
             val arrival = arrivalFor(shown)
             val chrome = LocalChrome.current
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .slapped(arrival == PageArrival.Slap && !first && !reduced) { pour }
+                    .onGloballyPositioned { at = it.positionInRoot() }
+                    .arriving(arrival, active = !first && !reduced, seed = seed) { pour }
                     .drawWithContent {
-                        // Sprayed from about where the place's title is, at the top of its column.
+                        // The page's own spot is about where its title is, at the top of its column.
                         val origin = Offset(chrome.start.toPx() + chrome.gutter.toPx() + 60.dp.toPx(), 90.dp.toPx())
-                        drawArrival(arrival, pour, seed, paint, origin)
+                        drawArrival(arrival, pour, seed, paint, origin, reach = reached?.let { it - at })
                     },
             ) {
                 content(shown)
@@ -704,20 +835,8 @@ private fun Rising(
 
 @Composable
 private fun Notice(message: String?, confirmation: Boolean, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
-    val reduced = LocalReducedMotion.current
-    AnimatedVisibility(
-        visible = message != null,
-        enter = if (reduced) fadeIn(Motion.fade()) else slideInVertically(Motion.enter()) { -it } + fadeIn(Motion.enter()),
-        exit = if (reduced) fadeOut(Motion.fade()) else slideOutVertically(Motion.exit()) { -it } + fadeOut(Motion.exit()),
-        modifier = modifier,
-    ) {
-        val shown = rememberLast(message) ?: return@AnimatedVisibility
-        NoticeToast(
-            message = shown,
-            confirmation = confirmation,
-            onDismiss = onDismiss,
-        )
-    }
+    // Glass poured out of a drop, like the song menu; see PouredNotice.
+    app.valen.ui.components.PouredNotice(message = message, confirmation = confirmation, onDismiss = onDismiss, modifier = modifier)
 }
 
 /** The last non-null [value]: what something keeps showing while it animates away. */

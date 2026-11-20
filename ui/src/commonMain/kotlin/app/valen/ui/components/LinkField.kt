@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.components
 
+import app.valen.ui.typing
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -61,6 +62,7 @@ fun LinkField(
         modifier = modifier
             .fillMaxWidth()
             .height(52.dp)
+            .typing()
             .clip(Radii.pillShape)
             .background(ValenColors.Fill)
             .border(1.dp, edge, Radii.pillShape)

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.desktop
 
+import app.valen.ui.KeyShortcuts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -127,10 +128,13 @@ private fun windowRun(cli: Cli) {
             boot = Boot(coordinator, playlists, mpris, built)
         }
 
+        // Every key nothing in the window took: Valen's shortcuts.
+        val keys = remember { KeyShortcuts() }
         Window(
             onCloseRequest = { shutdown(); exitApplication() },
             state = windowState,
             title = "Valen",
+            onKeyEvent = keys::handle,
         ) {
             val ready = boot
             LaunchedEffect(ready) {
@@ -140,7 +144,7 @@ private fun windowRun(cli: Cli) {
             if (ready == null) {
                 Starting(status)
             } else {
-                ValenApp(ready.coordinator, ready.playlists, cli.route.name, cli.query)
+                ValenApp(ready.coordinator, ready.playlists, cli.route.name, cli.query, keys = keys)
             }
         }
     }
@@ -261,7 +265,8 @@ private suspend fun play(coordinator: PlaybackCoordinator, request: Cli.PlayRequ
         System.err.println("valen: no result for ${request.raw}")
         return
     }
-    coordinator.play(track, results)
+    // VALEN_CAPTURE_ALONE=1: the song by itself, a queue at its end (what keeps the music going).
+    if (System.getenv("VALEN_CAPTURE_ALONE") != null) coordinator.play(track) else coordinator.play(track, results)
     println("valen: playing ${track.provider.label} · ${track.title} — ${track.artist} (${track.id})")
 }
 

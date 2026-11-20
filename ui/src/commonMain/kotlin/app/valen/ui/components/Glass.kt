@@ -127,6 +127,8 @@ fun GlassSurface(
     tint: Color? = null,
     sweepKey: Any? = null,
     orbit: Boolean = false,
+    /** A change of it makes the glass gulp (without the band of light): something dropped in. */
+    gulpKey: Any? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val backdrop = LocalBackdrop.current
@@ -157,6 +159,14 @@ fun GlassSurface(
         }
         sweep.snapTo(0f)
         sweep.animateTo(1f, tween(Motion.SweepMs, easing = Motion.Standard))
+    }
+    var gulpSeen by remember { mutableStateOf<Any?>(null) }
+    LaunchedEffect(gulpKey) {
+        val first = gulpSeen == null
+        gulpSeen = gulpKey ?: Unit
+        if (first || gulpKey == null || reduced) return@LaunchedEffect
+        gulp.snapTo(0.75f)
+        gulp.animateTo(0f, Motion.jelly())
     }
     // The light goes round [OrbitLaps] times when a song starts (or playing resumes), then rests:
     // following the screen's own frames for those laps only, drawn in its own layer (below). It used to run as an infinite
