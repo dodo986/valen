@@ -5,7 +5,7 @@ plugins {
 
 kotlin { jvmToolchain(21) }
 
-// The lyrics sources both apps use: Lyprio (when it is set up) and LRCLIB, over OkHttp, plus the
+// The lyrics sources both apps use: LiriQo, configured Lyprio and LRCLIB, over OkHttp, plus the
 // folder lyrics are kept in. A plain JVM library, so Android takes it as it is.
 dependencies {
     api(project(":core"))

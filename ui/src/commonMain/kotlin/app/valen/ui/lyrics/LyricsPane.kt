@@ -163,15 +163,16 @@ private const val GAP_MS = 4_500L
 
 @Composable
 private fun TimedLyrics(
-    lyrics: Lyrics,
+    original: Lyrics,
     track: Track,
     coordinator: PlaybackCoordinator,
     playing: Boolean,
     onSeek: (Long) -> Unit,
     compact: Boolean,
 ) {
+    val lyrics = remember(original) { original.withAnimationTiming() }
     val reduced = LocalReducedMotion.current
-    val clock = rememberLyricsClock(coordinator, playing, smooth = lyrics.timing == LyricsTiming.Words)
+    val clock = rememberLyricsClock(coordinator, playing, smooth = lyrics.lines.any { it.timedByWord || it.backing.isNotEmpty() })
     val rows = remember(lyrics) { rowsOf(lyrics) }
     val settings by coordinator.settings.collectAsState()
     // Settings → Lyrics: the pen's marks, and whether the words move or simply light up.

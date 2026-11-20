@@ -23,8 +23,8 @@ import kotlin.time.TimeSource
  * (a seek, a stall) is taken as it is.
  *
  * This is the one place outside the seek bars that asks for frames while a song plays, and only
- * while word-timed lyrics are on screen: otherwise (and under reduced motion) it follows the
- * reports as they come.
+ * while words with native or estimated timing are on screen: otherwise (and under reduced
+ * motion) it follows the reports as they come.
  */
 @Composable
 internal fun rememberLyricsClock(coordinator: PlaybackCoordinator, playing: Boolean, smooth: Boolean): LongState {

@@ -334,6 +334,41 @@ class ShellSmokeTest {
     }
 
     @Test
+    @org.junit.jupiter.api.Timeout(180)
+    fun `line timed lyrics animate across the phrase and still seek from its start`() {
+        val book = app.valen.core.LyricsBook(listOf(object : app.valen.core.LyricsSource {
+            override val name = "line test"
+            override suspend fun find(query: app.valen.core.LyricsQuery) = app.valen.core.LyricsFormats.parse(
+                "[00:01.00]lanterns shimmer softly\n[00:14.00]paper moons drift home\n[00:23.00]chalk stars glow", "lrc", name)
+        }))
+        val out = java.io.File("build/screens").also { it.mkdirs() }
+        for ((width, height) in listOf(1600 to 900, 2200 to 1200, 390 to 844)) {
+            inApp(width, height, lyrics = book) { coordinator, playlists ->
+                runBlocking {
+                    coordinator.play(coordinator.unifiedSearch("warm up").tracks.first())
+                    coordinator.toggle()
+                    coordinator.setLyricsShown(true)
+                }
+                setContent { ValenApp(coordinator, playlists, "now-playing") }
+                settleUntil(5_000) { runCatching { onNodeWithText("lanterns shimmer softly").assertExists() }.isSuccess }
+                for (at in listOf(3_000L, 10_000L)) {
+                    runBlocking { coordinator.seek(at) }
+                    settleUntil { coordinator.snapshot.value?.positionMs == at }
+                    settle(1_200)
+                    javax.imageio.ImageIO.write(onRoot().captureToImage().toAwtImage(), "png",
+                        java.io.File(out, "line-lyrics-${width}x$height-$at.png"))
+                }
+                val source = (book.known(coordinator.snapshot.value!!.track!!) as app.valen.core.LyricsState.Found).lyrics
+                assertEquals(app.valen.core.LyricsTiming.Lines, source.timing)
+                assertTrue(source.lines.all { it.words.isEmpty() })
+                onNodeWithText("paper moons drift home").performSemanticsAction(SemanticsActions.OnClick)
+                settleUntil { coordinator.snapshot.value?.positionMs == 14_000L }
+                assertEquals(14_000L, coordinator.snapshot.value?.positionMs)
+            }
+        }
+    }
+
+    @Test
     fun `settings turn the lyrics on, and the pen marks and moving words off`() = inApp(1600, 900) { coordinator, playlists ->
         setContent { ValenApp(coordinator, playlists, "settings") }
         settle(1_200L)
