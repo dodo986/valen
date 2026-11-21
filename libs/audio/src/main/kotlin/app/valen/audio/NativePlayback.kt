@@ -299,8 +299,8 @@ class NativePlayback(
                     if (gen != generation.get()) return
                     synchronized(publishing) { fromKept = kept; fromDisk = offline != null }
                     try {
-                        player.play(stream.withDurationOf(track), at)
-                        if (offline == null) cache?.keep(key, stream, playing = true)
+                        player.play(stream.withDurationOf(track, fromCache = offline != null), at)
+                        if (offline == null && mayCache(track, stream)) cache?.keep(key, stream, playing = true)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -310,7 +310,7 @@ class NativePlayback(
                         synchronized(publishing) { fromKept = false; fromDisk = false }
                         val fresh = streamFor(id, fresh = true).copy(cacheKey = key)
                         player.play(fresh.withDurationOf(track), at)
-                        cache?.keep(key, fresh, playing = true)
+                        if (mayCache(track, fresh)) cache?.keep(key, fresh, playing = true)
                     }
                 }
             } catch (e: CancellationException) {
@@ -333,11 +333,17 @@ class NativePlayback(
     }
 
     /** A cache entry can omit metadata; keep the catalogue's length at the sink too. */
-    private fun ResolvedStream.withDurationOf(track: Track): ResolvedStream =
-        if (durationMs > 0 || track.durationMs <= 0) this else copy(durationMs = track.durationMs)
+    private fun ResolvedStream.withDurationOf(track: Track, fromCache: Boolean = false): ResolvedStream {
+        val timed = if (durationMs > 0 || track.durationMs <= 0) this else copy(durationMs = track.durationMs)
+        return if (fromCache || mayCache(track, timed)) timed else timed.copy(cacheKey = null)
+    }
+
+    private fun mayCache(track: Track, stream: ResolvedStream): Boolean =
+        maxOf(track.durationMs, stream.durationMs) <= MAX_CACHE_DURATION_MS
 
     /** Looks the song likely next up ahead, and has the disk keep it, so it starts without a wait. */
     suspend fun prepare(track: Track) {
+        if (track.durationMs > MAX_CACHE_DURATION_MS) return
         val key = keyOf(track)
         if (cache?.has(key) == true) return
         val stream = try {
@@ -347,7 +353,7 @@ class NativePlayback(
         } catch (_: Exception) {
             return
         }
-        cache?.keep(key, stream.copy(cacheKey = key), playing = false)
+        if (mayCache(track, stream)) cache?.keep(key, stream.copy(cacheKey = key), playing = false)
     }
 
     /**
@@ -399,11 +405,12 @@ class NativePlayback(
             val gen = generation.get()
             val at = s.positionMs
             _snapshot.value = _snapshot.value?.copy(isPlaying = true, isBuffering = true)
-            val stream = cache?.offline(keyOf(track))
+            val offline = cache?.offline(keyOf(track))
+            val stream = offline
                 ?: runCatching { streamOf(idOf(track)).first.copy(cacheKey = keyOf(track)) }.getOrNull()
             if (stream != null && gen == generation.get()) {
                 try {
-                    handing.withLock { if (gen == generation.get()) player.play(stream.withDurationOf(track), at) }
+                    handing.withLock { if (gen == generation.get()) player.play(stream.withDurationOf(track, fromCache = offline != null), at) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -499,19 +506,24 @@ class NativePlayback(
         } finally {
             synchronized(lookups) { if (lookups[key] === mine) lookups.remove(key) }
         }
-        streams[key] = stream to clock()
-        // A few songs ahead and behind are enough; older addresses would have expired anyway.
-        if (streams.size > STREAMS_KEPT) {
-            streams.entries.minByOrNull { it.value.second }?.let { streams.remove(it.key) }
-        }
+        rememberStream(key, stream)
         return stream
     }
 
     /** A look-up of this caller's own, kept like any other. */
     private suspend fun resolveOwn(id: String, key: String): ResolvedStream {
         val stream = resolve(id, quality)
-        streams[key] = stream to clock()
+        rememberStream(key, stream)
         return stream
+    }
+
+    private fun rememberStream(key: String, stream: ResolvedStream) {
+        synchronized(streams) {
+            streams[key] = stream to clock()
+            while (streams.size > STREAMS_KEPT) {
+                streams.entries.minByOrNull { it.value.second }?.let { streams.remove(it.key) }
+            }
+        }
     }
 
     private fun failed(track: Track, at: Long, message: String) {
@@ -558,5 +570,6 @@ class NativePlayback(
          * address out. Each is a short string.
          */
         private const val STREAMS_KEPT = 32
+        private const val MAX_CACHE_DURATION_MS = 60 * 60_000L
     }
 }

@@ -31,16 +31,18 @@ internal fun rememberLyricsClock(coordinator: PlaybackCoordinator, playing: Bool
     val reduced = LocalReducedMotion.current
     val sound by coordinator.sound.collectAsState()
     val active by coordinator.active.collectAsState()
+    val snapshot by coordinator.snapshot.collectAsState()
     // The speed the song really plays at: the effects' only on a service that applies them (Spotify
     // plays at 1× whatever the notebook says, and carrying its words at 1.25× ran them ahead).
     val rate = remember(sound, active) { coordinator.currentRate() }
     val clock = remember(coordinator) { mutableLongStateOf(coordinator.snapshot.value?.positionMs ?: 0L) }
-    val frames = smooth && playing && !reduced
+    // A buffering player does not advance audio, so its lyric clock must not run ahead.
+    val frames = smooth && playing && snapshot?.isBuffering != true && !reduced
     LaunchedEffect(coordinator, playing, frames, rate) {
         val since = TimeSource.Monotonic.markNow()
         var anchorPos = coordinator.snapshot.value?.positionMs ?: clock.longValue
         var anchorAt = since.elapsedNow().inWholeMilliseconds
-        fun carried(now: Long) = if (playing) anchorPos + ((now - anchorAt) * rate).toLong() else anchorPos
+        fun carried(now: Long) = if (frames) anchorPos + ((now - anchorAt) * rate).toLong() else anchorPos
         if (!frames) clock.longValue = anchorPos
         launch {
             coordinator.snapshot.collect { snapshot ->

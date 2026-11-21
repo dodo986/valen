@@ -108,6 +108,8 @@ class ExoStreamCache(
         val source = dataSources(stream.headers).createDataSource()
         var position = 0L
         while (position < MAX_SONG_BYTES) {
+            val knownLength = ContentMetadata.getContentLength(cache.getContentMetadata(key))
+            if (knownLength > MAX_SONG_BYTES) return
             val spec = DataSpec.Builder().setUri(stream.url).setKey(key).setHttpRequestHeaders(stream.headers)
                 .setPosition(position).setLength(CHUNK_BYTES).build()
             val writer = CacheWriter(source, spec, null, null)
@@ -130,7 +132,8 @@ class ExoStreamCache(
         }
         if (position <= 0L) throw java.io.IOException("nothing came back")
         val length = ContentMetadata.getContentLength(cache.getContentMetadata(key))
-        if (length <= 0L) {
+        // Reaching the byte cap is not proof that an unknown-length stream is complete.
+        if (length <= 0L && position < MAX_SONG_BYTES) {
             val mutations = androidx.media3.datasource.cache.ContentMetadataMutations()
             androidx.media3.datasource.cache.ContentMetadataMutations.setContentLength(mutations, position)
             cache.applyContentMetadataMutations(key, mutations)
