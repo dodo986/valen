@@ -69,8 +69,8 @@ internal class Mark(
 
 /**
  * Which words of a song are marked, and how: decided once per song from its key, so the same
- * song is always marked the same way. Only word-timed lyrics are marked — the pen follows the
- * voice, and a line timed as a whole gives it nothing to follow.
+ * song is always marked the same way. Word intervals can be native or estimated for display
+ * within a timed line; lyrics with no timing have no marks.
  *
  * Not every word: about one in six, never two side by side, at most two to a line. A word sung
  * again in the same line is crossed out; a held note is circled or underlined while it is held;
@@ -78,7 +78,7 @@ internal class Mark(
  * in a row.
  */
 internal fun markWords(lyrics: Lyrics, seed: Int): List<List<Mark?>> {
-    if (lyrics.timing != LyricsTiming.Words) return lyrics.lines.map { emptyList() }
+    if (lyrics.timing == LyricsTiming.None) return lyrics.lines.map { emptyList() }
     val recent = ArrayDeque<Scribble>()
     var sinceLast = 3
     return lyrics.lines.mapIndexed { li, line ->

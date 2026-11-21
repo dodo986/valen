@@ -262,7 +262,7 @@ object LyricsFormats {
     }
 
     /** A line that is all backing vocals goes under the line it is sung with, when there is one. */
-    private fun attachBacking(lines: List<LyricLine>): List<LyricLine> {
+    fun attachBacking(lines: List<LyricLine>): List<LyricLine> {
         if (lines.none { it.aside }) return lines
         val out = mutableListOf<LyricLine>()
         for (line in lines) {

@@ -19,7 +19,7 @@ import kotlin.math.roundToLong
 
 /**
  * LRCLIB (lrclib.net): an open library of lyrics, timed by line, that needs no key. It is asked
- * after Lyprio, or alone when Lyprio is not set up: first for the exact song (title, artist,
+ * as the last fallback: first for the exact song (title, artist,
  * album and length), then by search, keeping only a result by the same artist and of about the
  * same length.
  */

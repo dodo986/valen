@@ -595,7 +595,7 @@ private fun PlaybackPart(coordinator: PlaybackCoordinator) {
     Spacer(Modifier.height(Space.step8))
     SectionHeader(title = "Lyrics", modifier = Modifier.arrive(8, ItemArrival.Swing))
     Note(
-        "Words come from Lyprio when it is set up, then from Spotify when you are signed in, " +
+        "Words come from LiriQo, then from Lyprio when it is set up, then Spotify when you are signed in, " +
             "then from LRCLIB.",
         Modifier.arrive(9),
     )

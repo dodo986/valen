@@ -22,23 +22,27 @@ import java.util.concurrent.TimeUnit
  *    `LYPRIO_HMAC_KEY`) in the environment;
  * 2. `lyprio.json` in Valen's config folder: `{"url": "https://…", "key": "<base64, 32 bytes>"}`;
  * 3. the build: the same Gradle properties (or `local.properties`) baked into both apps.
- * Without them Valen asks LRCLIB alone, which needs no key but times by line only.
+ * Without them LiriQo, service lyrics and LRCLIB still work without a Lyprio key.
  */
 object LyricsSetup {
 
     /**
-     * The sources in the order they are asked: Lyprio when it is set up, then the music services'
-     * own lyrics ([services]: Spotify's card, for a signed-in account), then LRCLIB.
+     * LiriQo first, then Lyprio when set up, music services' own lyrics ([services]: Spotify's
+     * card, for a signed-in account), then LRCLIB. Both platforms use this same chain.
      */
     fun sources(http: OkHttpClient, lyprio: LyprioEndpoint?, services: List<LyricsSource> = emptyList()): List<LyricsSource> = buildList {
         val client = http.newBuilder()
             .callTimeout(30, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .build()
+        add(LiriqoLyrics(client))
         if (lyprio != null) add(LyprioLyrics(client, lyprio))
         addAll(services)
         add(LrclibLyrics(client))
     }
+
+    /** A fresh cache keeps results from the reverted latency experiment out of the original lookup. */
+    fun store(dir: Path): LyricsStore = DiskLyricsStore(dir.resolve("liriqo-original-v1"))
 
     /** Lyprio's endpoint from the environment, the config file, or the build; null when none is set up. */
     fun lyprio(

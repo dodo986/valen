@@ -48,7 +48,6 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import app.valen.core.LyricsBook
 import app.valen.core.ServiceLyrics
-import app.valen.providers.lyrics.DiskLyricsStore
 import app.valen.providers.lyrics.LyricsSetup
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -221,7 +220,7 @@ object ValenRuntime {
                     write = { text -> runCatching { File(app.filesDir, "listening.json").writeText(text) } },
                 ),
             ),
-            // Lyprio when the build was given its address and key, then Spotify, then LRCLIB; kept in the cache.
+            // LiriQo, then configured Lyprio, Spotify and LRCLIB; kept in the cache.
             lyrics = LyricsBook(
                 LyricsSetup.sources(
                     http,
@@ -229,7 +228,7 @@ object ValenRuntime {
                     // Spotify's own, for a signed-in account whose Web Player is already up.
                     services = listOfNotNull(spotify?.let { ServiceLyrics("Spotify", it) }),
                 ),
-                DiskLyricsStore(File(app.cacheDir, "lyrics").toPath()),
+                LyricsSetup.store(File(app.cacheDir, "lyrics").toPath()),
             ),
             offline = shelf,
             version = version,
