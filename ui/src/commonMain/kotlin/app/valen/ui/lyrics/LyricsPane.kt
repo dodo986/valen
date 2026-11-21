@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.LongState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -176,44 +177,29 @@ private fun TimedLyrics(
     val rows = remember(lyrics) { rowsOf(lyrics) }
     val settings by coordinator.settings.collectAsState()
     // Settings → Lyrics: the pen's marks, and whether the words move or simply light up.
-    val marks = remember(lyrics, track.key, settings.lyricsMarks) {
-        if (settings.lyricsMarks) markWords(lyrics, track.key.hashCode()) else lyrics.lines.map { emptyList() }
+    val marks = remember(lyrics, track.key, settings.lyricsMarks, settings.lyricsPenFrequency) {
+        if (settings.lyricsMarks) markWords(lyrics, track.key.hashCode(), settings.lyricsPenFrequency) else lyrics.lines.map { emptyList() }
     }
-    val still = reduced || !settings.lyricsMotion
-    // How long each row still needs the clock: to its end, or to the end of the last mark on it.
+    // Settings → Lyrics → Moving words off, and the system's reduced motion, soften the stage's own
+    // transitions — they never strip its motion.
+    val soft = reduced || !settings.lyricsMotion
+    // How long each row still needs the clock: to its end, or to the end of the last mark on it —
+    // and, for a line, until its light and its marks have trailed off, so the two never cut out.
     val liveUntil = remember(rows, marks) {
         LongArray(rows.size) { i ->
             when (val row = rows[i]) {
-                is Row.Line -> max(row.endMs, marks.getOrNull(row.index)?.mapNotNull { it?.endMs }?.maxOrNull() ?: 0L) + 120
+                is Row.Line -> max(row.endMs, marks.getOrNull(row.index)?.mapNotNull { it?.endMs }?.maxOrNull() ?: 0L) + Motion.LyricTrailMs
                 else -> row.endMs
             }
         }
     }
-    val starts = remember(rows) { LongArray(rows.size) { rows[it].startMs } }
+    val stage = remember(rows, liveUntil) {
+        LyricStage(LongArray(rows.size) { rows[it].startMs }, LongArray(rows.size) { rows[it].endMs }, liveUntil)
+    }
     // The row the words stand on: the last one begun.
-    val active by remember(rows) {
-        derivedStateOf {
-            val t = clock.longValue
-            var lo = 0
-            var hi = rows.lastIndex - 1
-            var found = -1
-            while (lo <= hi) {
-                val mid = (lo + hi) / 2
-                if (starts[mid] <= t) { found = mid; lo = mid + 1 } else hi = mid - 1
-            }
-            found
-        }
-    }
-    val sung by remember(rows) { derivedStateOf { active.takeIf { it >= 0 && clock.longValue < rows[it].endMs } ?: -1 } }
-    val trailing by remember(rows) {
-        derivedStateOf {
-            val t = clock.longValue
-            val a = active
-            var first = a + 1
-            for (i in a downTo max(0, a - 3)) if (i != sung && liveUntil[i] > t && starts[i] <= t) first = i
-            if (first > a) IntRange.EMPTY else first..a
-        }
-    }
+    val active by remember(stage) { derivedStateOf { stage.active(clock.longValue) } }
+    val sung by remember(stage) { derivedStateOf { stage.sung(clock.longValue, active) } }
+    val trailing by remember(stage) { derivedStateOf { stage.trailing(clock.longValue, active, sung) } }
 
     val style = if (compact) LyricType.lineCompact else LyricType.line
     val backingStyle = if (compact) LyricType.backingCompact else LyricType.backing
@@ -256,7 +242,7 @@ private fun TimedLyrics(
     LaunchedEffect(active, following) {
         if (!following) return@LaunchedEffect
         val target = max(active, 0).toFloat()
-        if (reduced) pos.animateTo(target, tween(Motion.ReducedTweenMs)) else pos.animateTo(target, Motion.lyricsFollow())
+        if (soft) pos.animateTo(target, Motion.soft()) else pos.animateTo(target, Motion.lyricsFollow())
     }
     LaunchedEffect(touches) {
         if (touches == 0) return@LaunchedEffect
@@ -281,6 +267,13 @@ private fun TimedLyrics(
             .fadeEdges(top = if (compact) 0.06f else 0.1f, bottom = 0.2f)
             .scrollable(scrolling, Orientation.Vertical),
         content = {
+            // The depth of field: each line's place in the plane behind the words on show. A line
+            // near the song softens and one further off recedes. Only the lines around the song ever
+            // get a blurred layer — and the active one never does — while every line's recede is the
+            // same one curve, so nothing steps as a line crosses that edge. The depth is not a
+            // motion: it stays on under reduced motion too, so the stage never goes flat.
+            val lead = max(active, 0)
+            val blurOn = LyricsBlur.supported
             rows.forEachIndexed { i, row ->
                 key(row.id) {
                     val phase = when {
@@ -289,7 +282,10 @@ private fun TimedLyrics(
                         i <= active -> LinePhase.Past
                         else -> LinePhase.Upcoming
                     }
-                    Arrive(index = i, from = max(active, 0)) {
+                    // The credit is not a lyric: it keeps its tone and stays readable wherever the
+                    // song has got to.
+                    val distance = if (row is Row.Credit) 0 else i - lead
+                    Arrive(index = i, from = lead, focus = LyricsDepth.focus(distance), blur = LyricsDepth.blurs(distance, blurOn), soft = soft) { level ->
                         when (row) {
                             is Row.Line -> {
                                 val end = voices.size >= 2 && row.line.voice == voices[1]
@@ -302,7 +298,9 @@ private fun TimedLyrics(
                                     backingStyle = backingStyle,
                                     alignEnd = end,
                                     dim = dim,
-                                    still = still,
+                                    soft = soft,
+                                    depth = level,
+                                    blur = blurOn,
                                     onTap = {
                                         onSeek(row.line.startMs)
                                         scope.launch {
@@ -312,7 +310,7 @@ private fun TimedLyrics(
                                     },
                                 )
                             }
-                            is Row.Gap -> Breaths(row, phase, clock, style)
+                            is Row.Gap -> Breaths(row, phase, clock, style, soft, level, blurOn)
                             is Row.Credit -> Text(
                                 text = "Lyrics from ${row.source}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -345,7 +343,6 @@ private fun TimedLyrics(
             placeables.forEachIndexed { i, placeable ->
                 val d = i - lead
                 val k = when {
-                    still -> 0f
                     d > 0 -> min(d, Motion.LyricsCascadeLines) * Motion.LyricsCascade
                     d < 0 -> -min(-d, 2) * Motion.LyricsCascade * 0.4f
                     else -> 0f
@@ -369,16 +366,22 @@ private fun LineRow(
     backingStyle: TextStyle,
     alignEnd: Boolean,
     dim: Float,
-    still: Boolean,
+    /** Moving words off / reduced motion: the line still settles, on the shorter tween. */
+    soft: Boolean,
+    /** How near the song this line stands; read in the draw, so it costs no recomposition. */
+    depth: State<Float>,
+    /** Whether the platform blurs a line's layer at all (see [LyricsDepth.alpha]). */
+    blur: Boolean,
     onTap: () -> Unit,
 ) {
-    val reduced = LocalReducedMotion.current
-    // Still words keep one size: the sung line is marked by its brightness alone.
-    val focus = remember { Animatable(if (phase == LinePhase.Sung || still) 1f else 0f) }
-    LaunchedEffect(phase == LinePhase.Sung, still) {
-        val target = if (phase == LinePhase.Sung || still) 1f else 0f
-        if (reduced || still) focus.snapTo(target) else focus.animateTo(target, Motion.lean())
+    // A line comes forward as it is sung and sits back once it is over; softened settings take the
+    // same settle on the shorter tween rather than holding every line at one size.
+    val focus = remember { Animatable(if (phase == LinePhase.Sung) 1f else 0f) }
+    LaunchedEffect(phase == LinePhase.Sung, soft) {
+        val target = if (phase == LinePhase.Sung) 1f else 0f
+        if (soft) focus.animateTo(target, Motion.soft()) else focus.animateTo(target, Motion.lean())
     }
+    val rise = with(LocalDensity.current) { Motion.LyricSettleRise.toPx() }
     val align = if (alignEnd) TextAlign.End else TextAlign.Start
     Box(
         // One button to a screen reader, named by its words: "play from here".
@@ -406,6 +409,9 @@ private fun LineRow(
                     val s = Motion.LyricRestScale + (1f - Motion.LyricRestScale) * focus.value
                     scaleX = s
                     scaleY = s
+                    // A new active line rises into its place as it settles; the words beneath hold
+                    // still, so it is the line that moves, not the pane.
+                    translationY = -focus.value * rise
                     transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, 0.5f)
                 },
         ) {
@@ -419,7 +425,12 @@ private fun LineRow(
                     style = if (line.aside) backingStyle else style,
                     align = align,
                     dim = if (line.aside) dim * 0.75f else dim,
-                    still = still,
+                    soft = soft,
+                    startMs = line.startMs,
+                    endMs = line.endMs,
+                    field = true,
+                    depth = depth,
+                    blur = blur,
                 )
             }
             val backing = line.backingText
@@ -433,7 +444,11 @@ private fun LineRow(
                     style = backingStyle,
                     align = align,
                     dim = dim * 0.75f,
-                    still = still,
+                    soft = soft,
+                    startMs = line.startMs,
+                    endMs = line.endMs,
+                    depth = depth,
+                    blur = blur,
                     modifier = Modifier.padding(top = Space.step1),
                 )
             }
@@ -443,65 +458,111 @@ private fun LineRow(
 
 /**
  * A pause in the singing: three dabs of the marker that fill one after another across it, then
- * swell and go as the next line comes. It takes room only while it is the pause being sung.
+ * swell and go as the next line comes. A long pause is a held breath: a faint halo of the one
+ * colour gathers behind the dabs over it, then is drawn in and gone as the next line arrives. It
+ * takes room only while it is the pause being sung.
  */
 @Composable
-private fun Breaths(gap: Row, phase: LinePhase, clock: LongState, style: TextStyle) {
-    val reduced = LocalReducedMotion.current
+private fun Breaths(
+    gap: Row,
+    phase: LinePhase,
+    clock: LongState,
+    style: TextStyle,
+    /** Moving words off / reduced motion: the row still opens, on the shorter tween. */
+    soft: Boolean,
+    /** How near the song this pause stands; read in the draw. */
+    depth: State<Float>,
+    blur: Boolean,
+) {
     val shown = phase == LinePhase.Sung
     val open = remember { Animatable(if (shown) 1f else 0f) }
     LaunchedEffect(shown) {
         val target = if (shown) 1f else 0f
         when {
-            reduced -> open.snapTo(target)
+            soft -> open.animateTo(target, Motion.soft())
             shown -> open.animateTo(1f, tween(Motion.EnterMs, easing = Motion.Enter))
             else -> open.animateTo(0f, tween(Motion.ExitMs, easing = Motion.Exit))
         }
     }
     val primary = ValenColors.Primary
     val em = with(LocalDensity.current) { style.fontSize.toPx() }
-    val full = with(LocalDensity.current) { (em * 1.15f).toDp() }
+    val full = with(LocalDensity.current) { (em * PAUSE_EM).toDp() }
     Canvas(
         Modifier
             .fillMaxWidth()
             .height(full * open.value),
     ) {
         if (open.value <= 0.01f) return@Canvas
+        val alpha = LyricsDepth.alpha(depth.value, blur)
         val t = if (shown) clock.longValue else gap.endMs
         val g = ((t - gap.startMs).toFloat() / (gap.endMs - gap.startMs).coerceAtLeast(1)).coerceIn(0f, 1f)
         val leaving = ((t - (gap.endMs - BREATH_OUT_MS)).toFloat() / BREATH_OUT_MS).coerceIn(0f, 1f)
         val radius = em * 0.17f
         val y = size.height / 2f
+        val halo = LyricEffects.haloAlpha(g, leaving) * alpha
+        if (halo > 0.002f) {
+            val spread = LyricEffects.haloSpread(g, leaving)
+            pool(
+                center = Offset(radius * 1.2f + em * 0.62f, y),
+                width = Motion.LyricHaloEm * em * spread,
+                height = size.height * 0.92f * spread,
+                color = primary,
+                strength = halo,
+            )
+        }
         for (k in 0 until 3) {
             val local = (g * 3.2f - k).coerceIn(0f, 1f)
             val grow = 0.55f + 0.45f * Motion.Kinetic.transform(local)
             // As the next line comes they swell together and are gone.
             val out = 1f + 0.35f * sin(leaving * PI.toFloat())
-            val alpha = (0.28f + 0.72f * local) * (1f - leaving) * open.value
-            drawCircle(primary.copy(alpha = alpha), radius * grow * out, Offset(radius * 1.2f + k * em * 0.62f, y))
+            val dab = (0.28f + 0.72f * local) * (1f - leaving) * open.value * alpha
+            drawCircle(primary.copy(alpha = dab), radius * grow * out, Offset(radius * 1.2f + k * em * 0.62f, y))
         }
     }
 }
 
+/** How tall the pause row opens while its halo breathes, in ems of the lyric type. */
+private const val PAUSE_EM = 1.7f
+
 private const val BREATH_OUT_MS = 520L
 
-/** A row arriving with the words: it rises into place, the ones nearest the song first. */
+/**
+ * A row arriving with the words: it rises into place, the ones nearest the song first. It also
+ * carries its place in the stage's depth of field — nearer the song it comes forward and sharpens,
+ * further off it softens and recedes ([LyricsDepth]) — on the layer it already draws in, so a line
+ * settling costs no new layer and no recomposition: [level] is handed to the row's own draw.
+ */
 @Composable
-private fun Arrive(index: Int, from: Int, content: @Composable () -> Unit) {
-    val reduced = LocalReducedMotion.current
-    val rise = remember { Animatable(if (reduced) 1f else 0f) }
+private fun Arrive(
+    index: Int,
+    from: Int,
+    focus: Float,
+    blur: Boolean,
+    /** Moving words off / reduced motion: the row still arrives, on the shorter tween. */
+    soft: Boolean,
+    content: @Composable (State<Float>) -> Unit,
+) {
+    val rise = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        if (reduced) return@LaunchedEffect
         delay(min(abs(index - from), Motion.StaggerCap).toLong() * Motion.StaggerMs)
-        rise.animateTo(1f, tween(Motion.EnterMs, easing = Motion.Enter))
+        if (soft) rise.animateTo(1f, Motion.soft()) else rise.animateTo(1f, tween(Motion.EnterMs, easing = Motion.Enter))
     }
+    val level = remember { Animatable(focus) }
+    LaunchedEffect(focus, soft) {
+        // Moving words off and reduced motion keep the depth sweep, on the shorter tween.
+        if (soft) level.animateTo(focus, Motion.soft()) else level.animateTo(focus, tween(Motion.LyricDepthMs, easing = Motion.Standard))
+    }
+    val shown = remember(level) { level.asState() }
     val distance = with(LocalDensity.current) { Motion.RiseDistance.toPx() }
     Box(
         Modifier.graphicsLayer {
             alpha = rise.value
             translationY = (1f - rise.value) * distance
+            // Never the active line: at its own plane the level is 1 and there is no blur to make.
+            val radius = if (blur) LyricsDepth.blurPx(level.value, this) else 0f
+            renderEffect = if (radius > 0.05f) LyricsBlur.effect(radius) else null
         },
-    ) { content() }
+    ) { content(shown) }
 }
 
 /** While the words are looked up: flat blocks where the lines will stand. No shimmer. */

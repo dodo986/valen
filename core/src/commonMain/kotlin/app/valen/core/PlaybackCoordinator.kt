@@ -1338,6 +1338,10 @@ class PlaybackCoordinator(
     /** Whether the pen marks sung words of word-timed lyrics. */
     fun setLyricsMarks(on: Boolean) = updateSettings { it.copy(lyricsMarks = on) }
 
+    /** How freely the pen marks sung words. */
+    fun setLyricsPenFrequency(frequency: PenFrequency) =
+        updateSettings { it.copy(lyricsPenFrequency = frequency) }
+
     /** Whether sung words and lines move (rise, ripple, pour), or simply light up. */
     fun setLyricsMotion(on: Boolean) = updateSettings { it.copy(lyricsMotion = on) }
 

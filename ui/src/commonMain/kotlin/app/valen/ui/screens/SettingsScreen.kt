@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import app.valen.core.AudioQuality
+import app.valen.core.PenFrequency
 import app.valen.core.PlaybackCoordinator
 import app.valen.core.ProviderId
 import app.valen.core.SessionState
@@ -620,13 +621,34 @@ private fun PlaybackPart(coordinator: PlaybackCoordinator) {
             {
                 SwitchRow(
                     title = "Moving words",
-                    body = "Sung words rise a little, held notes ripple and the lines pour after each other.",
+                    body = "Sung words rise a little, held notes ripple and the lines pour after each other. " +
+                        "Off keeps that motion, softer.",
                     checked = settings.lyricsMotion,
                     onChange = coordinator::setLyricsMotion,
                 )
             },
         ),
         modifier = Modifier.arrive(10),
+    )
+
+    Spacer(Modifier.height(Space.step8))
+    SectionHeader(title = "Pen frequency", modifier = Modifier.arrive(11, ItemArrival.Swing))
+    Note(
+        "How often the pen marks the words: about one in nine, one in five (the usual), or one in three.",
+        Modifier.arrive(12),
+    )
+    SegmentedFilter(
+        options = PenFrequency.entries,
+        selected = settings.lyricsPenFrequency,
+        onSelect = coordinator::setLyricsPenFrequency,
+        label = { frequency ->
+            when (frequency) {
+                PenFrequency.SPARSE -> "Sparse"
+                PenFrequency.STANDARD -> "Standard"
+                PenFrequency.FREQUENT -> "Frequent"
+            }
+        },
+        modifier = Modifier.arrive(13),
     )
 }
 

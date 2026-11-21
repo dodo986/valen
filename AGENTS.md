@@ -359,7 +359,10 @@ Key invariants:
   and with its Web Player already up: `SpotifyProvider.serviceLyrics` throws `LyricsSkipped` rather
   than wake the page, and the desktop's `RetryingProvider` asks only an adapter already attached
   (never `ready()`, which would launch Chrome). A skipped source keeps a miss out of the store.
-  `AppSettings.lyricsMarks`/`lyricsMotion` (Settings → Lyrics) turn the pen and the motion off.
+  `AppSettings.lyricsMarks`/`lyricsMotion` (Settings → Lyrics) turn the pen and the motion off, and
+  `lyricsPenFrequency` levels the pen (Sparse/Standard/Frequent, Standard about one sung word in
+  five; a mark's gesture is chosen from the word's own kind — held, repeated, shouted, short, long —
+  never at random).
   Lyprio's address and HMAC key come only from the environment, `lyprio.json`, or a build's
   own properties (`LyricsSetup`), never from the source. The pen marks only word-timed lyrics, chosen from the song's key
   (`markWords`), and every mark is drawn from the song's time, so a seek back unwrites it.
@@ -379,13 +382,25 @@ Key invariants:
   frame loop too: `PlayingBars` (the equaliser on the playing row) used one and kept every page,
   and the page under the stage, at 60 fps while a song played (found in Pass 24: 601 frames in
   10 s with the lyrics hidden). It steps on `Motion.PlayingBarsStepMs` now and is read in the draw.
-- **The lyrics draw without layers.** Each line's words are drawn from its `TextLayoutResult`
-  with the tone in the paint (`drawText(layout, color/brush)`); the sung line's soft edge is a
-  horizontal gradient brush per row, and words at one height are drawn in one clipped run. A
-  `saveLayer` per line (to dim it, then a `DstIn` mask for the sung one) was most of a phone's
-  GPU time on the stage. `Geometry` (a box per letter) is built once per laid-out paragraph and
-  its word pieces only when the line is sung; mark ink only for marked words. The pane's one
-  offscreen layer is its edge fade.
+- **The lyrics draw without layers, bar the stage's depth of field.** Each line's words are drawn
+  from its `TextLayoutResult` with the tone in the paint (`drawText(layout, color/brush)`); the sung
+  line's soft edge is a horizontal gradient brush per row, and words at one height are drawn in one
+  clipped run. A `saveLayer` per line (to dim it, then a `DstIn` mask for the sung one) was most of
+  a phone's GPU time on the stage. `Geometry` (a box per letter) is built once per laid-out paragraph
+  and its word pieces only when the line is sung; mark ink only for marked words. The pane's one
+  offscreen layer is its edge fade, and the stage's depth of field adds a blur only to the few lines
+  within five of the song — on the layer each row already draws in (`placeWithLayer`), never on the
+  active line and never on a row out of sight; where a platform cannot blur a layer (a phone below
+  Android 12) the recede is alpha and tone instead (`LyricsDepth`, `LyricsBlur`). The light field,
+  the glints and a pause's halo are each one feathered brush (`pool`), drawn in the line's own
+  draw, and every one of them — like the marks — is read from the lyric clock in the draw, so a
+  pause freezes them, a seek lands them and a seek back unwinds them (`LyricEffects`). **The stage's
+  motion is never a setting's to strip.** Settings → Lyrics → Moving words off and the system's
+  reduced motion keep every one of those effects (the fill still sweeps through each word, words
+  still rise and ripple, the light still breathes and the halo still gathers); only the pane's own
+  transitions — follow, fade, settle, depth — take the shorter tween (`Motion.soft()`), and the
+  depth of field and its blur stay on. This is the deliberate exception to the reduced-motion rule
+  below: the words are the stage, and a still stage reads as a fault (owner, Pass 34).
 - **The desktop JVM is tuned for a player, not a server** (`app-desktop` `jvmArgs`): G1 with
   `-Xmx1g`, idle heap returned after 5 s (`G1PeriodicGCInterval`, free ratio 10–30 %), two GC
   threads; the AppImage's `AppRun` sets `MALLOC_ARENA_MAX=2`. Default flags kept a heap grown at
@@ -653,8 +668,9 @@ empty states, purple-blue gradients, emoji icons, placeholder copy, shadows.
 - **Motion**: 280ms standard, 320ms enter, 200ms exit; pages pour (620ms) and their items `rise`;
   titles are `KineticText`; presses squeeze and spring; queue reorder spring(520, .83). Every
   duration, curve and spring is a `Motion` token. Reduced motion → 120ms fades, no pour, no rise,
-  no drift, marks drawn complete. Check motion with the capture frame dump (§2), not by eye on a
-  still.
+  no drift, marks drawn complete — **except the lyrics stage, which keeps its motion and only
+  softens it** (`Motion.soft()`; see the lyrics invariant above). Check motion with the capture
+  frame dump (§2), not by eye on a still.
 - **Icons**: Material Symbols Rounded only, no service logos. **Hit targets ≥44dp. Rows truncate
   at one line.**
 - **Empty states are a title and a real sentence with at most one action**, on the page's left

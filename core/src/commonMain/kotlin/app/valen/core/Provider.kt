@@ -178,6 +178,13 @@ enum class AudioQuality(val label: String) {
     HIGH("High"),
 }
 
+/**
+ * How freely the pen marks the words: [SPARSE] holds it back, [STANDARD] is about one word in
+ * five, [FREQUENT] marks nearly every eligible word the spacing rule allows.
+ */
+@kotlinx.serialization.Serializable
+enum class PenFrequency { SPARSE, STANDARD, FREQUENT }
+
 @kotlinx.serialization.Serializable
 data class AppSettings(
     val quality: AudioQuality = AudioQuality.AUTO,
@@ -231,6 +238,8 @@ data class AppSettings(
     val lyrics: Boolean = false,
     /** The pen goes over some words of word-timed lyrics once they are sung (struck, circled…). */
     val lyricsMarks: Boolean = true,
+    /** How freely the pen marks those words: sparse, standard or frequent. */
+    val lyricsPenFrequency: PenFrequency = PenFrequency.STANDARD,
     /** Sung words rise a little, held notes ripple and the lines pour after each other. */
     val lyricsMotion: Boolean = true,
     /** The sound effects, for every song a player can apply them to. */

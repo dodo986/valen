@@ -325,6 +325,12 @@ class ShellSmokeTest {
                 val at = coordinator.snapshot.value?.positionMs ?: 0L
                 assertEquals(true, at in 12_000L..40_000L, "played from $at")
                 assertEquals(true, coordinator.settings.value.lyrics)
+                // Moving words off keeps the stage moving, softer: the words still fill and still stand.
+                runBlocking { coordinator.setLyricsMotion(false) }
+                settle(600)
+                onNodeWithText("paper stars").assertExists()
+                runBlocking { coordinator.setLyricsMotion(true) }
+                settle()
                 onNodeWithContentDescription("Hide lyrics").performClick()
                 settle(1_200L)
                 onNodeWithText("chalk on the wall").assertDoesNotExist()
@@ -398,6 +404,14 @@ class ShellSmokeTest {
         assertEquals(false, coordinator.settings.value.lyricsMarks)
         assertEquals(false, coordinator.settings.value.lyricsMotion)
         assertEquals(true, coordinator.settings.value.lyrics)
+        // The pen's frequency is its own control: Standard is the default, and a level answers at once.
+        assertEquals(app.valen.core.PenFrequency.STANDARD, coordinator.settings.value.lyricsPenFrequency)
+        onNode(hasText("Sparse") and hasClickAction()).performSemanticsAction(SemanticsActions.OnClick)
+        settle()
+        assertEquals(app.valen.core.PenFrequency.SPARSE, coordinator.settings.value.lyricsPenFrequency)
+        onNode(hasText("Frequent") and hasClickAction()).performSemanticsAction(SemanticsActions.OnClick)
+        settle()
+        assertEquals(app.valen.core.PenFrequency.FREQUENT, coordinator.settings.value.lyricsPenFrequency)
     }
 
     @Test

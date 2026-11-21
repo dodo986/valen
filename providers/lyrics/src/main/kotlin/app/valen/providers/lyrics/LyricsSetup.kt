@@ -41,8 +41,12 @@ object LyricsSetup {
         add(LrclibLyrics(client))
     }
 
-    /** A fresh cache keeps results from the reverted latency experiment out of the original lookup. */
-    fun store(dir: Path): LyricsStore = DiskLyricsStore(dir.resolve("liriqo-original-v1"))
+    /**
+     * Where LiriQo's answers are kept. The folder carries a version: a change in the way its times
+     * are read (the reverted latency experiment, and now the cue-level repair) must not be undone by
+     * an answer an older reader kept.
+     */
+    fun store(dir: Path): LyricsStore = DiskLyricsStore(dir.resolve("liriqo-original-v2"))
 
     /** Lyprio's endpoint from the environment, the config file, or the build; null when none is set up. */
     fun lyprio(

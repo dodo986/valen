@@ -188,6 +188,69 @@ object Motion {
     const val ScribbleHeldMaxMs = 2400
 
     /**
+     * The stage's depth of field. The line being sung is crisp and full size; the lines around it
+     * soften and the ones further off recede — more blur, lower opacity — so the words on show
+     * read as one plane in focus and the rest as paper behind it. A line's focus moves over
+     * [LyricDepthMs] as it becomes sung or past, and settles it: it rises [LyricSettleRise] into
+     * focus. The blur is at most [LyricBlurFarDp] and is kept within [LyricBlurLines] lines of the
+     * song, so no layer is spent on words far out of sight; past that the recede is opacity alone.
+     * Where a platform cannot blur a layer the recede is carried by opacity and tone instead
+     * ([LyricDepthAlphaNoBlur], [LyricDepthTint]).
+     */
+    const val LyricDepthMs = 520
+    /** A line a step to the side of the song is already this far out of focus. */
+    const val LyricDepthNearStep = 0.30f
+    const val LyricDepthPastStep = 0.34f
+    const val LyricDepthFloor = 0.22f
+    const val LyricBlurLines = 5
+    val LyricBlurFarDp = 6.5.dp
+    const val LyricDepthAlphaNear = 0.62f
+    const val LyricDepthAlphaNoBlur = 0.54f
+    const val LyricDepthTint = 0.2f
+    val LyricSettleRise = 3.dp
+
+    /**
+     * The light field behind the line being sung: a feathered pool of the one colour — the cover's,
+     * when the colour is taken from the cover — that blooms in as the line arrives
+     * ([LyricFieldInMs]), breathes while it is sung ([LyricFieldBreatheMs] a breath, by
+     * [LyricFieldBreathe] of its own strength) and trails off as the line passes ([LyricTrailMs]).
+     * It reaches [LyricFieldSpreadEm] past the letters, so it reads as light through glass, never
+     * as a card or a pill.
+     */
+    const val LyricFieldAlpha = 0.14f
+    const val LyricFieldInMs = 420f
+    const val LyricFieldSpreadEm = 0.6f
+    const val LyricFieldBreatheMs = 5200f
+    const val LyricFieldBreathe = 0.18f
+
+    /** A line's light and its marks trail off over this long once the line is over. */
+    const val LyricTrailMs = 900L
+    const val LyricMarkTrailTo = 0.78f
+
+    /**
+     * A glint of the primary follows the sung edge through a word, and a short word gets a dab of
+     * ink. The glint is only a hint of light on the letters — the eye should read the moving word,
+     * not a lamp beside it — so it stays far below the field's strength.
+     */
+    const val LyricGlintAlpha = 0.09f
+    const val LyricGlintEm = 0.55f
+    const val LyricInkAlpha = 0.3f
+    const val LyricInkMs = 220L
+    const val LyricInkShortMs = 460L
+
+    /** A held note's crest carries a soft glow along it, [LyricHeldGlowEm] of the word at a time. */
+    const val LyricHeldGlowAlpha = 0.24f
+    const val LyricHeldGlowEm = 1.7f
+
+    /**
+     * A long pause, held: a faint halo spreads behind its dabs over the pause, gathers and fades
+     * as the next line arrives. On with Moving words, like the rest of the stage's ripples.
+     */
+    const val LyricHaloAlpha = 0.12f
+    const val LyricHaloGrow = 0.35f
+    const val LyricHaloEm = 3.4f
+
+    /**
      * "Your week". Each page stays [StoryPageMs] ([StoryShortMs] for the opening, [StoryLongMs] for
      * a list and the song of the week) unless held; its song starts [StorySongDelayMs] after it
      * lands, so tapping through does not start a song per page; its figures count up over
@@ -350,9 +413,14 @@ object Motion {
     const val TickMs = 360
     const val TickDelayMs = 140
 
-    /** Reduced motion: short fades, no travel. */
+    /**
+     * Reduced motion: short fades, no travel. The lyrics stage is the one exception — Settings →
+     * Lyrics → Moving words off and the system's reduced motion keep the whole show, and only take
+     * its own transitions on this shorter, softer tween ([soft]) rather than stripping them.
+     */
     const val ReducedMs = 120
     const val ReducedTweenMs = 160
+    fun <T> soft(): FiniteAnimationSpec<T> = tween(ReducedTweenMs, easing = Standard)
 
     fun <T> standard(): FiniteAnimationSpec<T> = tween(StandardMs, easing = Standard)
     fun <T> enter(): FiniteAnimationSpec<T> = tween(EnterMs, easing = Enter)

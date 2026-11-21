@@ -43,6 +43,9 @@ internal class ScribbleInk(
     private val total = lengths.sum().coerceAtLeast(1f)
     private val piece = Path()
 
+    /** How many times the pen touches down for this mark (one path each). */
+    val strokeCount: Int get() = strokes.size
+
     /** The mark drawn up to [progress] (0–1) in [color]. */
     fun draw(scope: DrawScope, progress: Float, color: Color) = with(scope) {
         if (progress <= 0f) return@with
@@ -261,12 +264,134 @@ internal fun scribbleInk(kind: Scribble, box: WordBox, seed: Int, density: Float
                 }
             }
         }
+        Scribble.Brackets -> {
+            // A [ at the left and a ] at the right, each opened in two strokes; the side stops
+            // short of the foot, so the ends never meet. Drawn left to right, as a hand would.
+            width = pen * 0.9f
+            val top = cap - 0.02f * em
+            val foot = low + 0.13f * em
+            strokes += Path().apply {
+                moveTo(x0 - 0.02f * em + j(0.02f), top + j(0.03f))
+                lineTo(x0 - 0.15f * em + j(0.02f), top + 0.03f * em + j(0.03f))
+                lineTo(x0 - 0.14f * em + j(0.02f), b + 0.04f * em + j(0.03f))
+            }
+            strokes += Path().apply {
+                moveTo(x0 - 0.14f * em + j(0.02f), foot - 0.05f * em + j(0.03f))
+                lineTo(x0 - 0.01f * em + j(0.02f), foot + j(0.03f))
+            }
+            strokes += Path().apply {
+                moveTo(x1 + 0.02f * em + j(0.02f), top + j(0.03f))
+                lineTo(x1 + 0.15f * em + j(0.02f), top + 0.03f * em + j(0.03f))
+                lineTo(x1 + 0.14f * em + j(0.02f), b + 0.04f * em + j(0.03f))
+            }
+            strokes += Path().apply {
+                moveTo(x1 + 0.14f * em + j(0.02f), foot - 0.05f * em + j(0.03f))
+                lineTo(x1 + 0.01f * em + j(0.02f), foot + j(0.03f))
+            }
+        }
+        Scribble.DoubleUnderline -> {
+            val y1 = b + 0.17f * em
+            val length1 = w + 0.12f * em
+            val phase = r.nextFloat() * 6f
+            strokes += Path().apply {
+                moveTo(x0 - 0.04f * em, y1 + j(0.02f))
+                val steps = 12
+                for (i in 1..steps) {
+                    val s = i / steps.toFloat()
+                    val sag = sin(s * PI.toFloat()) * 0.05f * em
+                    val ripple = sin(s * 6f + phase) * 0.015f * em
+                    lineTo(x0 - 0.04f * em + length1 * s, y1 + sag + ripple)
+                }
+            }
+            // The second line sits lower, runs on past the word and flicks up where it leaves it.
+            val y2 = b + 0.3f * em
+            val from = x0 - 0.05f * em
+            val to = x1 + 0.24f * em
+            strokes += Path().apply {
+                moveTo(from, y2 + j(0.02f))
+                val steps = 14
+                for (i in 1..steps) {
+                    val s = i / steps.toFloat()
+                    val sag = sin(s * PI.toFloat()) * 0.05f * em
+                    val flick = if (s > 0.78f) ((s - 0.78f) / 0.22f) * 0.16f * em else 0f
+                    lineTo(from + (to - from) * s, y2 + sag - flick)
+                }
+            }
+            if (drip > 0f) {
+                val at = 0.25f + r.nextFloat() * 0.4f
+                dripAt = Offset(from + (to - from) * at, y2 + sin(at * PI.toFloat()) * 0.05f * em)
+                dripLength = (0.35f + 0.9f * drip) * em
+            }
+        }
+        Scribble.DotTrail -> {
+            // Small dabs under the word, each its own touch of the pen (so progress unwrites them
+            // one at a time), the dabs shorter the further the trail runs.
+            width = pen * 0.8f
+            val n = 5 + r.nextInt(4)
+            val y = b + 0.18f * em
+            val run = w + 0.14f * em
+            for (i in 0 until n) {
+                val s = (i + 0.5f) / n
+                val dab = (0.1f * (1f - s) + 0.005f) * em
+                val cx = x0 - 0.04f * em + run * s + j(0.03f)
+                val cy = y + s * 0.05f * em + j(0.03f)
+                strokes += Path().apply {
+                    moveTo(cx - dab, cy)
+                    lineTo(cx + dab, cy)
+                }
+            }
+        }
+        Scribble.EchoLoop -> {
+            width = pen * 0.9f
+            val cx = (x0 + x1) / 2f
+            val cy = b - 0.36f * em
+            val rx = w / 2f + 0.28f * em
+            val ry = 0.6f * em
+            val tilt = j(0.06f) / em
+            val phase = r.nextFloat() * 6f
+            // The loop is left open: the pen stops before its own start.
+            strokes += smooth(loopPoints(cx, cy, rx, ry, tilt, phase, r, 205f, 320f, 0.06f))
+            // A smaller echo of it, dropped beside the word and just as open.
+            val erx = (rx * 0.45f).coerceAtMost(0.9f * em)
+            val ery = ry * 0.55f
+            strokes += smooth(loopPoints(cx + rx * 0.7f, cy + 0.34f * em, erx, ery, -tilt, phase + 1.7f, r, 230f, 315f, 0.1f))
+        }
+        Scribble.Caret -> {
+            // One stroke, two arms, thrown over the word like a hat.
+            width = pen * 0.95f
+            val arms = cap - 0.06f * em
+            val apex = cap - 0.36f * em + j(0.05f)
+            strokes += Path().apply {
+                moveTo(x0 - 0.06f * em + j(0.03f), arms + j(0.03f))
+                lineTo((x0 + x1) / 2f + j(0.09f), apex)
+                lineTo(x1 + 0.07f * em + j(0.03f), arms + j(0.03f))
+            }
+        }
+        Scribble.Scallop -> {
+            // A row of small round arcs under the word: one running stroke, no sharp corners.
+            width = pen * 0.9f
+            val y = b + 0.18f * em
+            val n = max(3, (w / (0.28f * em)).toInt())
+            val run = w + 0.1f * em
+            val from = x0 - 0.05f * em
+            strokes += Path().apply {
+                moveTo(from, y + j(0.02f))
+                for (i in 0 until n) {
+                    val xa = from + run * i / n
+                    val xb = from + run * (i + 1) / n
+                    quadraticTo((xa + xb) / 2f, y + 0.09f * em + j(0.015f), xb, y + j(0.02f))
+                }
+            }
+        }
     }
     // A fine overspray where the pen first touched, like the marker under a title.
     val first = when (kind) {
         Scribble.Burst -> Offset(x1 + 0.1f * em, cap - 0.1f * em)
+        Scribble.Caret -> Offset((x0 + x1) / 2f, cap - 0.28f * em)
+        Scribble.Brackets -> Offset(x0 - 0.2f * em, cap)
         Scribble.Double, Scribble.Strike, Scribble.Swipe -> Offset(x0 - 0.06f * em, mid)
-        Scribble.Underline, Scribble.Zigzag -> Offset(x0 - 0.04f * em, b + 0.17f * em)
+        Scribble.Underline, Scribble.Zigzag, Scribble.DoubleUnderline, Scribble.DotTrail, Scribble.Scallop ->
+            Offset(x0 - 0.04f * em, b + 0.17f * em)
         else -> Offset(x0 - 0.04f * em, cap + 0.06f * em)
     }
     val mist = if (kind == Scribble.Swipe) emptyList() else List(5 + r.nextInt(4)) {
@@ -291,4 +416,31 @@ private fun smooth(points: List<Offset>): Path {
     }
     points.last().let { path.lineTo(it.x, it.y) }
     return path
+}
+
+/**
+ * The points of a loop round ([cx], [cy]) made by a wobbling hand: it opens as it goes and stops
+ * after [sweepDeg] of turn, so its ends never meet.
+ */
+private fun loopPoints(
+    cx: Float,
+    cy: Float,
+    rx: Float,
+    ry: Float,
+    tilt: Float,
+    phase: Float,
+    r: Random,
+    startDeg: Float,
+    sweepDeg: Float,
+    grow: Float,
+): List<Offset> {
+    val start = (startDeg + (r.nextFloat() - 0.5f) * 24f) * PI.toFloat() / 180f
+    val sweep = sweepDeg * PI.toFloat() / 180f
+    return (0..44).map { i ->
+        val a = start + sweep * i / 44f
+        val g = 1f + grow * i / 44f + 0.03f * sin(a * 3f + phase)
+        val px = cos(a) * rx * g
+        val py = sin(a) * ry * g
+        Offset(cx + px * cos(tilt) - py * sin(tilt), cy + px * sin(tilt) + py * cos(tilt))
+    }
 }
