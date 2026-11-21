@@ -16,10 +16,10 @@
         config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "google-chrome";
       };
       pname = "valen";
-      version = "1.0.0-alpha.15";
+      version = "1.0.0-alpha.16";
       src = pkgs.fetchurl {
         url = "https://github.com/dodo986/valen/releases/download/v${version}/Valen-${version}-x86_64.AppImage";
-        hash = "sha256-w64hbllVR93UwIgd9g9j4T+g7Vuc5anxUicl6uiiLVQ=";
+        hash = "sha256-x/yoyZpbmvWceZNkf2ApD5vrxgFwSLyUjCsN/9m3kb4=";
       };
       contents = pkgs.appimageTools.extract { inherit pname version src; };
       valen = pkgs.appimageTools.wrapType2 {
