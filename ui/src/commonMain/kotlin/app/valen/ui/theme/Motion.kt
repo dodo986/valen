@@ -159,13 +159,14 @@ object Motion {
 
     /**
      * Lyrics. The lines follow the song on a soft spring, and while they travel each line below
-     * the sung one lags a little more of what is left to go ([LyricsCascade] a line, up to
+     * the sung one lags a little more of the scroll's speed ([LyricsCascade] a line, up to
      * [LyricsCascadeLines]), so they spread like poured paint and gather where they stop. After a
      * scroll by hand they wait [LyricsResumeMs] before following again.
      */
     fun <T> lyricsFollow(): SpringSpec<T> = SpringSpec(stiffness = 150f, dampingRatio = 0.84f)
     const val LyricsCascade = 0.075f
     const val LyricsCascadeLines = 7
+    const val LyricsLagSeconds = 0.08f
     const val LyricsResumeMs = 2600L
 
     /** A line coming forward as it is sung, and sitting back once it is over. */

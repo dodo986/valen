@@ -40,41 +40,65 @@ internal fun rememberLyricsClock(coordinator: PlaybackCoordinator, playing: Bool
     val frames = smooth && playing && snapshot?.isBuffering != true && !reduced
     LaunchedEffect(coordinator, playing, frames, rate) {
         val since = TimeSource.Monotonic.markNow()
-        var anchorPos = coordinator.snapshot.value?.positionMs ?: clock.longValue
-        var anchorAt = since.elapsedNow().inWholeMilliseconds
-        fun carried(now: Long) = if (frames) anchorPos + ((now - anchorAt) * rate).toLong() else anchorPos
-        if (!frames) clock.longValue = anchorPos
+        val initial = coordinator.snapshot.value?.positionMs ?: clock.longValue
+        val timebase = LyricsTimebase(initial, 0, rate)
+        if (!frames) clock.longValue = initial
         launch {
             coordinator.snapshot.collect { snapshot ->
                 val reported = snapshot?.positionMs ?: 0L
                 val now = since.elapsedNow().inWholeMilliseconds
-                val off = reported - carried(now)
-                if (!frames || abs(off) > JUMP_MS) {
-                    anchorPos = reported
-                } else {
-                    // A small difference is taken a third at a time, so the words never stutter.
-                    anchorPos = carried(now) + off / 3
-                }
-                anchorAt = now
                 if (!frames) clock.longValue = reported
+                else timebase.report(reported, now)
             }
         }
         if (!frames) return@LaunchedEffect
         while (true) {
             withFrameMillis {
-                val next = carried(since.elapsedNow().inWholeMilliseconds)
-                val shown = clock.longValue
-                // Small steps back are held (the next report brings the time forward again);
-                // a seek back is a real jump and is followed.
-                if (next >= shown || shown - next > HOLD_BACK_MS) clock.longValue = next
+                clock.longValue = timebase.positionAt(since.elapsedNow().inWholeMilliseconds)
             }
         }
     }
     return clock
 }
 
-/** A report this far from the carried time is a seek, not drift. */
-private const val JUMP_MS = 400L
+/** A continuous display clock between player reports. Adding even a third of an error at the
+ * report's arrival is still an instantaneous jump (or a freeze when backwards steps are held).
+ * Spread drift corrections over future frames instead, with at most 20% speed adjustment. Large
+ * discontinuities still land immediately, so a real seek never waits for the clock to catch up. */
+internal class LyricsTimebase(positionMs: Long, atMs: Long, private val rate: Float = 1f) {
+    private var anchorPos = positionMs.toDouble()
+    private var anchorAt = atMs
+    private var correction = 0.0
+    private var correctionMs = CORRECTION_MS
 
-/** A step back smaller than this is drift and is not shown. */
-private const val HOLD_BACK_MS = 300L
+    private fun carried(now: Long): Double {
+        val elapsed = (now - anchorAt).coerceAtLeast(0).toDouble()
+        val p = (elapsed / correctionMs).coerceIn(0.0, 1.0)
+        val eased = p * p * (3.0 - 2.0 * p)
+        return anchorPos + elapsed * rate + correction * eased
+    }
+
+    fun positionAt(now: Long): Long = carried(now).toLong().coerceAtLeast(0)
+
+    fun report(positionMs: Long, atMs: Long) {
+        val predicted = carried(atMs)
+        val error = positionMs - predicted
+        anchorAt = atMs
+        if (abs(error) > JUMP_MS) {
+            anchorPos = positionMs.toDouble()
+            correction = 0.0
+        } else {
+            anchorPos = predicted
+            correction = error
+            // Smoothstep's peak slope is 1.5. Keep even a negative correction monotonic at
+            // slower playback rates, without holding frames or changing the song's own cues.
+            correctionMs = maxOf(CORRECTION_MS, abs(error) * 1.5 / (rate * MAX_RATE_CORRECTION))
+        }
+    }
+
+    private companion object {
+        const val JUMP_MS = 400L
+        const val CORRECTION_MS = 500.0
+        const val MAX_RATE_CORRECTION = 0.2
+    }
+}

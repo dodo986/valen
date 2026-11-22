@@ -7,15 +7,25 @@ import app.valen.core.LyricsTiming
 
 /**
  * Display-only word intervals for lines that have no native word timing. Longer words get more
- * of the line's interval; this is a visual estimate, not timing supplied by the lyrics source.
- * The source model, its timing classification and the disk cache are left as they were.
+ * of the line's interval, ending by the next phrase from that singer. Some line-only providers
+ * give every phrase a five-second placeholder even when the next starts much sooner; using that
+ * whole window made the estimated words lag and cut off half-lit at every line change.
+ * This is a visual estimate, not native timing. The source model and disk cache stay untouched.
  */
 internal fun Lyrics.withAnimationTiming(): Lyrics {
     if (timing == LyricsTiming.None || instrumental) return this
+    val nextByVoice = lines.filter { !it.aside && it.text.isNotBlank() }.groupBy { it.voice }.mapValues { (_, phrases) ->
+        phrases.map { it.startMs }.distinct().sorted().zipWithNext().toMap()
+    }
     val animated = lines.map { line ->
-        val words = line.words.ifEmpty { animationWords(line.text, line.startMs, line.endMs) }
-        val backing = line.backing.ifEmpty { animationWords(line.backingText.orEmpty(), line.startMs, line.endMs) }
-        if (words == line.words && backing == line.backing) line else line.copy(words = words, backing = backing)
+        val next = if (line.aside) null else nextByVoice[line.voice]?.get(line.startMs)
+        val estimatedEnd = if (line.words.isEmpty() && next != null) minOf(line.endMs, next) else line.endMs
+        val words = line.words.ifEmpty { animationWords(line.text, line.startMs, estimatedEnd) }
+        // Real backing cues may outlive the next lead phrase: never crop or rescale those.
+        val backing = line.backing.ifEmpty { animationWords(line.backingText.orEmpty(), line.startMs, estimatedEnd) }
+        val end = if (line.words.isEmpty() && line.backing.isEmpty()) estimatedEnd else line.endMs
+        if (words == line.words && backing == line.backing && end == line.endMs) line
+        else line.copy(endMs = end, words = words, backing = backing)
     }
     return if (animated == lines) this else copy(lines = animated)
 }

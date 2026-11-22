@@ -212,6 +212,9 @@ private fun TimedLyrics(
 
     // The row standing at the anchor, as a fractional row index, sprung toward the active row.
     val pos = remember { Animatable(max(active, 0).toFloat()) }
+    // LaunchedEffect cancels the previous spring before starting the next one; Animatable clears
+    // its velocity on cancellation. Keep the last frame's velocity for a continuous retarget.
+    val followVelocity = remember { mutableFloatStateOf(0f) }
     var following by remember { mutableStateOf(true) }
     var manual by remember { mutableFloatStateOf(0f) }
     var touches by remember { mutableIntStateOf(0) }
@@ -240,9 +243,14 @@ private fun TimedLyrics(
     }
 
     LaunchedEffect(active, following) {
-        if (!following) return@LaunchedEffect
+        if (!following) {
+            followVelocity.floatValue = 0f
+            return@LaunchedEffect
+        }
         val target = max(active, 0).toFloat()
-        if (soft) pos.animateTo(target, Motion.soft()) else pos.animateTo(target, Motion.lyricsFollow())
+        pos.animateTo(target, if (soft) Motion.soft() else Motion.lyricsFollow(),
+            initialVelocity = followVelocity.floatValue) { followVelocity.floatValue = velocity }
+        followVelocity.floatValue = 0f
     }
     LaunchedEffect(touches) {
         if (touches == 0) return@LaunchedEffect
@@ -336,20 +344,15 @@ private fun TimedLyrics(
             val anchor = height * anchorShare
             val p = pos.value
             val base = yAt(p) + manual
-            // While the words travel, each row below the one that leads lags a little more of
-            // what is left to go; the ones above go a little ahead.
-            val left = if (following) (yAt(pos.targetValue) - yAt(p)).coerceIn(-maxLagPx, maxLagPx) else 0f
-            val lead = max(active, 0)
+            // Velocity and position stay continuous when the target changes. The old remaining
+            // distance jumped by a whole row at each new phrase, kicking the cascade backwards.
+            val rowHeight = LyricsFollow.rowHeight(tops, p)
+            val velocityPx = if (following) followVelocity.floatValue * rowHeight else 0f
             placeables.forEachIndexed { i, placeable ->
-                val d = i - lead
-                val k = when {
-                    d > 0 -> min(d, Motion.LyricsCascadeLines) * Motion.LyricsCascade
-                    d < 0 -> -min(-d, 2) * Motion.LyricsCascade * 0.4f
-                    else -> 0f
-                }
+                val cascade = LyricsFollow.cascadeOffset(i - p, velocityPx, maxLagPx)
                 // Every row is placed, even far off: each has its own layer, so one out of sight
                 // costs nothing to move, and a row that comes and goes from the layout is avoided.
-                placeable.placeWithLayer(0, (tops[i] - base + anchor + left * k).roundToInt())
+                placeable.placeWithLayer(0, (tops[i] - base + anchor + cascade).roundToInt())
             }
         }
     }

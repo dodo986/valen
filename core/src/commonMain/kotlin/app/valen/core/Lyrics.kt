@@ -12,7 +12,7 @@ import kotlinx.serialization.Serializable
 /*
  * A song's words, and where they come from. Lyrics are looked up by song, never by service: a
  * song playing from SoundCloud is asked for by its title and artist like any other. Sources are
- * tried in order (LiriQo, configured Lyprio, service lyrics, then LRCLIB); the first answer wins.
+ * tried in order (configured Lyprio, LiriQo, service lyrics, then LRCLIB); the first answer wins.
  * Everything here is pure: the sources that go to the network live in `providers/lyrics`.
  */
 

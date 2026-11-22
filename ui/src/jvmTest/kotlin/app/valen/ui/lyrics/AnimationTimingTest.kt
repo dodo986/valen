@@ -10,6 +10,72 @@ import org.junit.jupiter.api.Test
 
 class AnimationTimingTest {
     @Test
+    fun `five second placeholder windows finish their estimated words before the next phrase`() {
+        // Reproduces the overlapping line-only windows in the reported recording, with invented text.
+        val source = Lyrics(listOf(
+            LyricLine(0, 5_000, "lanterns shimmer softly"),
+            LyricLine(2_550, 7_550, "paper moons drift"),
+            LyricLine(3_920, 8_920, "chalk stars glow"),
+        ), LyricsTiming.Lines, "LiriQo")
+        val animated = source.withAnimationTiming()
+        assertEquals(listOf(2_550L, 3_920L, 8_920L), animated.lines.map { it.endMs })
+        assertEquals(listOf(2_550L, 3_920L, 8_920L), animated.lines.map { it.words.last().endMs })
+        assertTrue(animated.lines[0].words.all { it.endMs <= source.lines[1].startMs })
+        assertTrue(animated.lines[1].words.all { it.endMs <= source.lines[2].startMs })
+        assertEquals(listOf(5_000L, 7_550L, 8_920L), source.lines.map { it.endMs })
+        assertTrue(source.lines.all { it.words.isEmpty() })
+        assertEquals(LyricsTiming.Lines, animated.timing)
+    }
+
+    @Test
+    fun `an explicit short phrase keeps the instrumental gap before the next phrase`() {
+        val source = Lyrics(listOf(LyricLine(0, 1_500, "chalk moons"), LyricLine(5_000, 6_000, "paper stars")), LyricsTiming.Lines, "test")
+        val animated = source.withAnimationTiming()
+        assertEquals(1_500L, animated.lines.first().endMs)
+        assertEquals(1_500L, animated.lines.first().words.last().endMs)
+    }
+
+    @Test
+    fun `another singer or a backing phrase does not shorten the lead estimate`() {
+        val source = Lyrics(listOf(
+            LyricLine(1_000, 6_000, "lanterns glow", voice = "v1"),
+            LyricLine(1_500, 5_000, "paper stars", voice = "v2"),
+            LyricLine(2_000, 3_000, "oh again", voice = "v1", aside = true),
+            LyricLine(4_000, 9_000, "chalk moons", voice = "v1"),
+        ), LyricsTiming.Lines, "test")
+        val animated = source.withAnimationTiming()
+        assertEquals(4_000L, animated.lines[0].words.last().endMs)
+        assertEquals(5_000L, animated.lines[1].words.last().endMs)
+        assertEquals(3_000L, animated.lines[2].words.last().endMs)
+    }
+
+    @Test
+    fun `same start labels and unsorted input never make zero length estimates`() {
+        val source = Lyrics(listOf(
+            LyricLine(4_000, 9_000, "chalk moons"),
+            LyricLine(1_000, 6_000, "lanterns glow"),
+            LyricLine(1_000, 6_000, "paper stars"),
+        ), LyricsTiming.Lines, "test")
+        val lines = source.withAnimationTiming().lines
+        assertEquals(listOf(9_000L, 4_000L, 4_000L), lines.map { it.endMs })
+        assertTrue(lines.flatMap { it.words }.all { it.endMs > it.startMs })
+    }
+
+    @Test
+    fun `native overlapping lead and backing times survive the next phrase intact`() {
+        val native = LyricLine(1_000, 7_000, "lantern", words = listOf(LyricWord("lantern", 1_234, 6_876, false)))
+        val backing = listOf(LyricWord("oh", 2_000, 6_500, false))
+        val under = LyricLine(1_000, 7_000, "paper stars", backing = backing, backingText = "oh")
+        val next = LyricLine(3_000, 8_000, "chalk moons")
+        val sung = Lyrics(listOf(native, next), LyricsTiming.Words, "test").withAnimationTiming()
+        assertSame(native, sung.lines.first())
+        val withBacking = Lyrics(listOf(under, next), LyricsTiming.Words, "test").withAnimationTiming().lines.first()
+        assertEquals(3_000L, withBacking.words.last().endMs)
+        assertSame(backing, withBacking.backing)
+        assertEquals(7_000L, withBacking.endMs)
+    }
+
+    @Test
     fun `line animation spans the phrase with longer intervals for longer words`() {
         val source = Lyrics(listOf(LyricLine(1_000, 9_000, "a lantern glows")), LyricsTiming.Lines, "LiriQo")
         val animated = source.withAnimationTiming()
