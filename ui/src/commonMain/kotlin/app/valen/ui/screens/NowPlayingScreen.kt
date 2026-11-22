@@ -388,6 +388,10 @@ private fun SideStage(
                         onSeek = controls.onSeek,
                     )
                     Spacer(Modifier.height(Space.step1))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        VolumeSlider(volume = volume, onVolume = controls.onVolume, railWidth = 96.dp)
+                    }
+                    Spacer(Modifier.height(Space.step1))
                     StageTransport(snapshot, controls, playSize = 60.dp, gap = Space.step6)
                 }
             } else {
@@ -478,6 +482,10 @@ private fun TallStage(
                         enabled = snapshot?.canSeek ?: true,
                         onSeek = controls.onSeek,
                     )
+                    Spacer(Modifier.height(Space.step1))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        VolumeSlider(volume = volume, onVolume = controls.onVolume, railWidth = 96.dp)
+                    }
                     Spacer(Modifier.height(Space.step1))
                     StageTransport(snapshot, controls, playSize = 64.dp, gap = Space.step4)
                 }
