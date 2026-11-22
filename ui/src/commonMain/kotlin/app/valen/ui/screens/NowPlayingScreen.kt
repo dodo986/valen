@@ -6,6 +6,7 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import app.valen.core.artistsIn
+import app.valen.core.artistKey
 import app.valen.ui.artist.BrowsePage
 import app.valen.ui.artist.LocalBrowser
 
@@ -376,7 +377,7 @@ private fun SideStage(
             if (lyrics != null) {
                 // The words take the column; the song sits above them and the transport below.
                 Column(Modifier.fillMaxSize().padding(top = Space.step10, bottom = Space.step2)) {
-                    StageWords(track = track, isPlaying = snapshot?.isPlaying == true, large = false, heart = controls.heart)
+                    StageWords(coordinator = coordinator, track = track, isPlaying = snapshot?.isPlaying == true, large = false, heart = controls.heart)
                     Spacer(Modifier.height(Space.step4))
                     lyrics(Modifier.weight(1f).fillMaxWidth(), false)
                     Spacer(Modifier.height(Space.step3))
@@ -395,7 +396,7 @@ private fun SideStage(
                         modifier = Modifier.heightIn(min = min(cover, 420.dp)),
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        StageWords(track = track, isPlaying = snapshot?.isPlaying == true, large = true, heart = controls.heart)
+                        StageWords(coordinator = coordinator, track = track, isPlaying = snapshot?.isPlaying == true, large = true, heart = controls.heart)
                         Spacer(Modifier.height(Space.step8))
                         LiveSeekBar(
                             position = position,
@@ -505,7 +506,7 @@ private fun TallStage(
                             .align(Alignment.CenterHorizontally),
                     )
                     Spacer(Modifier.height(Space.step8))
-                    StageWords(track = track, isPlaying = snapshot?.isPlaying == true, large = false, heart = controls.heart)
+                    StageWords(coordinator = coordinator, track = track, isPlaying = snapshot?.isPlaying == true, large = false, heart = controls.heart)
                     Spacer(Modifier.height(Space.step5))
                     LiveSeekBar(
                         position = position,
@@ -605,7 +606,7 @@ private fun AnimatedContentTransitionScope<*>.stageSwap(reduced: Boolean, toWord
 
 /** The song, set left like a headline, cross-fading when the song changes. */
 @Composable
-private fun StageWords(track: Track, isPlaying: Boolean, large: Boolean, heart: (@Composable () -> Unit)? = null) {
+private fun StageWords(coordinator: PlaybackCoordinator, track: Track, isPlaying: Boolean, large: Boolean, heart: (@Composable () -> Unit)? = null) {
     val reduced = LocalReducedMotion.current
     // The heart stays put while the words change, so its fill is the song's, not the transition's.
     Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth()) {
@@ -642,8 +643,9 @@ private fun StageWords(track: Track, isPlaying: Boolean, large: Boolean, heart: 
                 maxLines = 2,
             )
             Spacer(Modifier.height(Space.step1))
-            // Each artist named is the way to their page; the album after them is only words.
+            // Artist names link directly; resolve album names through the catalogue when tapped.
             val browser = LocalBrowser.current
+            val scope = LocalAppScope.current
             val names = remember(shown.artist) { artistsIn(shown.artist).ifEmpty { listOf(shown.artist) } }
             val link = TextLinkStyles(
                 style = SpanStyle(color = ValenColors.Text2),
@@ -656,7 +658,20 @@ private fun StageWords(track: Track, isPlaying: Boolean, large: Boolean, heart: 
                         if (i > 0) append(", ")
                         withLink(LinkAnnotation.Clickable(tag = name, styles = link) { browser.open(BrowsePage.Artist(name)) }) { append(name) }
                     }
-                    shown.album?.takeIf { it.isNotBlank() && it != shown.title }?.let { append("  ·  $it") }
+                    shown.album?.takeIf { it.isNotBlank() && it != shown.title }?.let { album ->
+                        append("  ·  ")
+                        withLink(LinkAnnotation.Clickable(tag = "album:$album", styles = link) {
+                            scope.launch {
+                                val wantedArtists = artistsIn(shown.artist).map(::artistKey).toSet()
+                                val release = coordinator.artists.searchReleases("$album ${shown.artist}", limit = 12)
+                                    .firstOrNull { candidate ->
+                                        candidate.title.equals(album, ignoreCase = true) &&
+                                            artistsIn(candidate.artist).any { artistKey(it) in wantedArtists }
+                                    }
+                                if (release != null) browser.open(BrowsePage.Album(release))
+                            }
+                        }) { append(album) }
+                    }
                 },
                 style = if (large) MaterialTheme.typography.titleLarge else MaterialTheme.typography.bodyLarge,
                 color = ValenColors.Text2,
