@@ -101,9 +101,26 @@ VALEN_KEY_ALIAS=valen
 VALEN_KEY_PASSWORD=…
 ```
 
-## Optional secrets
+## Lyrics secrets
 
-`LYPRIO_BASE_URL` and `LYPRIO_HMAC_KEY`: without them, both apps take lyrics from LRCLIB alone.
+`LYPRIO_BASE_URL` and `LYPRIO_HMAC_KEY` are Lyprio's signed endpoint and key — the pair Metrolist's
+published build carries, which is why Valen uses it instead of a public address. They are the primary
+lyrics source; without them a build leaves Lyprio out and lyrics come from LiriQo, a service's own
+card and LRCLIB. The release workflow warns when either is missing (the builds still ship, just
+without word-timed Lyprio lyrics).
+
+The pair never goes in the source. The workflow takes it from repository secrets; a hand build can
+give it in the environment or in the git-ignored `local.properties` (the same two names), and a
+running app can be pointed at another Lyprio with `VALEN_LYPRIO_URL`/`VALEN_LYPRIO_KEY` or
+`$XDG_CONFIG_HOME/valen/lyprio.json`. To set the repository's:
+
+```bash
+gh secret set LYPRIO_BASE_URL -R dodo986/valen --body "https://<lyprio-host>"
+gh secret set LYPRIO_HMAC_KEY -R dodo986/valen --body "<base64, 32 bytes>"
+```
+
+A newer Metrolist release can carry a changed pair; it is read from that release's published APK (the
+dex string pool), and checked with a signed protocol-2 search before it is used.
 
 ## A release by hand
 
@@ -113,7 +130,8 @@ The same steps, locally:
 source scripts/env.sh
 V=1.0.0-alpha.3
 CODE=$(./gradlew -q -Pvalen.version=$V printVersion | awk '{print $2}')
-./gradlew -Pvalen.version=$V :app-android:assembleRelease :app-desktop:packageAppImage :app-desktop:packageDeb
+LYPRIO_BASE_URL=... LYPRIO_HMAC_KEY=... \
+  ./gradlew -Pvalen.version=$V :app-android:assembleRelease :app-desktop:packageAppImage :app-desktop:packageDeb
 VALEN_VERSION=$V scripts/appimage.sh
 VALEN_REPO=dodo986/valen scripts/release-files.sh $V $CODE build/release
 ```

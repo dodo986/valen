@@ -10,7 +10,8 @@
 #
 # Secrets (Settings → Secrets and variables → Actions), see RELEASING.md:
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD (required)
-#   LYPRIO_BASE_URL, LYPRIO_HMAC_KEY (optional; without them the builds ask LRCLIB alone)
+#   LYPRIO_BASE_URL, LYPRIO_HMAC_KEY (the primary lyrics source; without them Lyprio is left out of
+#   the build and lyrics fall to LiriQo, a service's own card and LRCLIB — the check below warns)
 name: Release
 
 on:
@@ -82,6 +83,15 @@ jobs:
           fi
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/valen.keystore"
           echo "VALEN_KEYSTORE=$RUNNER_TEMP/valen.keystore" >> "$GITHUB_ENV"
+
+      - name: Lyrics endpoint
+        env:
+          LYPRIO_BASE_URL: ${{ secrets.LYPRIO_BASE_URL }}
+          LYPRIO_HMAC_KEY: ${{ secrets.LYPRIO_HMAC_KEY }}
+        run: |
+          if [ -z "$LYPRIO_BASE_URL" ] || [ -z "$LYPRIO_HMAC_KEY" ]; then
+            echo "::warning::LYPRIO_BASE_URL/LYPRIO_HMAC_KEY are not set: this release has no Lyprio and its lyrics fall to LiriQo, a service's own card and LRCLIB. See RELEASING.md."
+          fi
 
       - name: Test and build
         env:
