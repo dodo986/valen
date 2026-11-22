@@ -1,6 +1,34 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.ui.lyrics
 
+import app.valen.ui.theme.Motion
+import kotlin.math.floor
+
+/** Cascade follows the scroll's continuous position and velocity, never the next row's target.
+ * Using the distance left to a newly selected target displaced every following row immediately,
+ * before the spring had moved even one pixel. */
+internal object LyricsFollow {
+    /** Interpolate the velocity's pixel scale too: wrapped lines have different heights. */
+    fun rowHeight(tops: IntArray, position: Float): Float {
+        if (tops.size < 2) return 0f
+        val p = position.coerceIn(0f, (tops.size - 2).toFloat())
+        val row = floor(p).toInt()
+        val here = (tops[row + 1] - tops[row]).toFloat()
+        val next = if (row + 2 < tops.size) (tops[row + 2] - tops[row + 1]).toFloat() else here
+        return here + (next - here) * (p - row)
+    }
+
+    fun cascadeOffset(distance: Float, velocityPx: Float, maxLagPx: Float): Float {
+        val lag = (velocityPx * Motion.LyricsLagSeconds).coerceIn(-maxLagPx, maxLagPx)
+        val share = if (distance > 0f) {
+            distance.coerceAtMost(Motion.LyricsCascadeLines.toFloat()) * Motion.LyricsCascade
+        } else {
+            distance.coerceAtLeast(-2f) * Motion.LyricsCascade * 0.4f
+        }
+        return lag * share
+    }
+}
+
 /**
  * Where the song is among the pane's rows, from the song's time alone. The row the words stand on
  * is the last one begun, the line being sung is that row while it has not ended, and the rows still
