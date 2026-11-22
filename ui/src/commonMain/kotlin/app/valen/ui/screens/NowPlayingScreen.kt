@@ -215,6 +215,7 @@ fun NowPlayingScreen(
                 }
 
                 side -> SideStage(
+                    coordinator = coordinator,
                     track = track,
                     snapshot = snapshot,
                     position = position,
@@ -228,6 +229,7 @@ fun NowPlayingScreen(
                 )
 
                 else -> TallStage(
+                    coordinator = coordinator,
                     track = track,
                     snapshot = snapshot,
                     position = position,
@@ -322,6 +324,7 @@ private const val StageCoverWithWords = 0.8f
 /** Wide and landscape: the cover on the left, everything about the song beside it. */
 @Composable
 private fun SideStage(
+    coordinator: PlaybackCoordinator,
     track: Track,
     snapshot: PlayerSnapshot?,
     position: State<Long>,
@@ -425,6 +428,7 @@ private fun SideStage(
 /** A phone, or a window taller than it is wide: the cover on top, the song under it. */
 @Composable
 private fun TallStage(
+    coordinator: PlaybackCoordinator,
     track: Track,
     snapshot: PlayerSnapshot?,
     position: State<Long>,
