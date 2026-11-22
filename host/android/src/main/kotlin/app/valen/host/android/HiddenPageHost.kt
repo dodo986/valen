@@ -147,6 +147,16 @@ class HiddenPageHost(
 
     override suspend fun header(url: String): String? = onMain { cookies().getCookie(url) }
 
+    /**
+     * Writes session cookies for [url] into this page's store now, and flushes them: a session a
+     * service renewed must survive the app being swiped away.
+     */
+    suspend fun setSessionCookies(url: String, cookies: List<Pair<String, String>>) = onMain {
+        val jar = cookies()
+        for ((name, value) in cookies) jar.setCookie(url, "$name=$value; Path=/; Secure")
+        jar.flush()
+    }
+
     override suspend fun clear() {
         val done = CompletableDeferred<Unit>()
         main.post {

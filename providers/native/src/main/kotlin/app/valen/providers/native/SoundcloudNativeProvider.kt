@@ -3,6 +3,7 @@ package app.valen.providers.native
 
 import app.valen.audio.NativePlayback
 import app.valen.audio.SoundcloudAudio
+import app.valen.audio.SoundcloudSession
 import app.valen.core.AudioQuality
 import app.valen.core.MusicProvider
 import app.valen.core.PlaylistCatalog
@@ -31,13 +32,13 @@ class SoundcloudNativeProvider(
     private val signIn: ProviderSignIn,
     private val playback: NativePlayback,
     private val audio: SoundcloudAudio,
-    /** The account's OAuth token from the page's cookie, when one is signed in; never stored. */
-    oauth: (suspend () -> String?)? = null,
+    /** The account's session from the browser's cookies, when one is signed in; never stored. */
+    session: (suspend () -> SoundcloudSession?)? = null,
 ) : MusicProvider, PlaylistCatalog {
 
     override val id: ProviderId = ProviderId.SOUNDCLOUD
 
-    private val catalog = SoundcloudPlaylistCatalog(audio, oauth)
+    private val catalog = SoundcloudPlaylistCatalog(audio, session)
 
     override val provider: ProviderId get() = id
 

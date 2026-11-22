@@ -26,6 +26,7 @@ import app.valen.audio.DiskAudioCache
 import app.valen.audio.FfplayPlayer
 import app.valen.audio.NativePlayback
 import app.valen.audio.SoundcloudAudio
+import app.valen.audio.SoundcloudSession
 import app.valen.audio.YoutubeAudio
 import app.valen.core.Track
 import app.valen.core.PlaylistLibrary
@@ -89,7 +90,9 @@ suspend fun buildProviders(hosts: DesktopHosts, scope: CoroutineScope): Provider
     val providers = ArrayList<MusicProvider>(3)
     val failures = LinkedHashMap<ProviderId, String>()
     val youtube = YoutubeAudio()
-    val soundcloud = SoundcloudAudio()
+    // A renewed SoundCloud session is written back into the browser's cookie jar (best effort:
+    // without a running browser it lives for this run only, in SoundcloudAudio).
+    val soundcloud = SoundcloudAudio(persist = { hosts.setSoundCloudSession(it.accessToken, it.refreshToken) })
     // Songs kept on disk for both native services: a song heard before, or the one up next,
     // plays from the file with no lookup and no network.
     val cacheDir = java.io.File(
@@ -136,7 +139,7 @@ suspend fun buildProviders(hosts: DesktopHosts, scope: CoroutineScope): Provider
                     hosts.soundCloudSignIn,
                     playback,
                     soundcloud,
-                    oauth = { soundCloudToken(hosts) },
+                    session = { soundCloudSession(hosts) },
                 )
             },
         ),
@@ -249,16 +252,18 @@ private class Builder(
 )
 
 /**
- * The SoundCloud account's OAuth token, taken from the browser's cookie jar when one is signed in.
- * Never stored; null when signed out or no browser is running.
+ * The SoundCloud account's session, taken from the browser's cookie jar when one is signed in: the
+ * access token and, when the browser keeps one, the refresh token that renews it. Never stored.
  */
-private suspend fun soundCloudToken(hosts: DesktopHosts): String? =
-    hosts.cookiesFor(SoundCloudSignIn.ORIGIN)
-        ?.split(';')
-        ?.map { it.trim() }
-        ?.firstOrNull { it.startsWith("oauth_token=") }
-        ?.substringAfter('=')
-        ?.takeIf { it.isNotBlank() }
+private suspend fun soundCloudSession(hosts: DesktopHosts): SoundcloudSession? {
+    val header = hosts.cookiesFor(SoundCloudSignIn.ORIGIN) ?: return null
+    val cookies = header.split(';').mapNotNull { part ->
+        val eq = part.indexOf('=')
+        if (eq <= 0) null else part.substring(0, eq).trim() to part.substring(eq + 1).trim()
+    }.toMap()
+    val access = cookies["oauth_token"]?.takeIf { it.isNotBlank() } ?: return null
+    return SoundcloudSession(access, cookies["oauth_refresh_token"]?.takeIf { it.isNotBlank() })
+}
 
 /** The Spotify Web Player tab and the bridge the adapter expects after every page load. */
 private suspend fun buildSpotify(hosts: DesktopHosts, scope: CoroutineScope): MusicProvider {

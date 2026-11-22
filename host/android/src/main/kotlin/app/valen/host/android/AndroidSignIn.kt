@@ -242,6 +242,10 @@ class AndroidSignIn private constructor(
         fun oauthToken(cookieHeader: String?): String? =
             parseCookieHeader(cookieHeader)["oauth_token"]?.takeIf { it.isNotBlank() }
 
+        /** The refresh token that renews SoundCloud's access token, when the browser keeps one. */
+        fun oauthRefreshToken(cookieHeader: String?): String? =
+            parseCookieHeader(cookieHeader)["oauth_refresh_token"]?.takeIf { it.isNotBlank() }
+
         const val YTM_ORIGIN = "https://music.youtube.com"
         const val YTM_SIGN_IN_URL = "https://accounts.google.com/ServiceLogin?ltmpl=music&service=youtube&passive=true" +
             "&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F"

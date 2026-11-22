@@ -152,6 +152,21 @@ class DesktopHosts(
         runCatching { spotify().cookieHeader(url) }.getOrNull()
 
     /**
+     * Writes a renewed SoundCloud session back into the browser's cookie jar, through the Web
+     * Player tab [cookiesFor] reads it from (cookies are browser-wide). Never launches Chrome: with
+     * no browser running there is nothing to write, and the renewed session lives for this run only.
+     */
+    suspend fun setSoundCloudSession(accessToken: String, refreshToken: String?) {
+        runCatching {
+            val cookies = buildList {
+                add("oauth_token" to accessToken)
+                refreshToken?.takeIf { it.isNotBlank() }?.let { add("oauth_refresh_token" to it) }
+            }
+            spotify().setCookies(cookies, "soundcloud.com")
+        }
+    }
+
+    /**
      * Recovers the browser before the adapter treats a lost connection as a failure. A start
      * already in progress counts as alive; its generation invalidates the old adapter afterwards.
      */

@@ -23,6 +23,7 @@ import app.valen.host.android.HiddenPageHost
 import app.valen.host.android.WebPlayerHost
 import app.valen.audio.NativePlayback
 import app.valen.audio.SoundcloudAudio
+import app.valen.audio.SoundcloudSession
 import app.valen.audio.YoutubeAudio
 import app.valen.audio.DiskAudioCache
 import app.valen.host.android.ExoAudioPlayer
@@ -138,7 +139,20 @@ object ValenRuntime {
         // Valen's effects in its audio chain. Their hidden pages are kept for signing in only; the
         // account's cookies come from them (reading a cookie loads no page).
         val youtube = YoutubeAudio(http)
-        val soundcloudAudio = SoundcloudAudio(http)
+        val soundcloudAudio = SoundcloudAudio(
+            http,
+            // A renewed session goes back into the hidden page's cookie jar: SoundCloud's access
+            // token now lasts a day, and the refresh token that renews it must survive a restart.
+            persist = { session ->
+                scHost.setSessionCookies(
+                    AndroidSignIn.SC_ORIGIN,
+                    buildList {
+                        add("oauth_token" to session.accessToken)
+                        session.refreshToken?.takeIf { it.isNotBlank() }?.let { add("oauth_refresh_token" to it) }
+                    },
+                )
+            },
+        )
         // Songs kept on disk for both, one cache (ExoPlayer allows one per folder).
         val songs = ExoStreamCache(app, DiskAudioCache.budget(File(app.cacheDir, "songs"), SONG_CACHE_BYTES), http, scope)
         val ytmusic = YtmusicNativeProvider(
@@ -151,7 +165,12 @@ object ValenRuntime {
             scSignIn,
             NativePlayback(ExoAudioPlayer(app, scope, http, songs), scope, cache = songs) { id, quality -> soundcloudAudio.resolve(id, quality) },
             soundcloudAudio,
-            oauth = { AndroidSignIn.oauthToken(scHost.header(AndroidSignIn.SC_ORIGIN)) },
+            session = {
+                val header = scHost.header(AndroidSignIn.SC_ORIGIN)
+                AndroidSignIn.oauthToken(header)?.let { access ->
+                    SoundcloudSession(access, AndroidSignIn.oauthRefreshToken(header))
+                }
+            },
         )
         // Downloads: one song at a time from YouTube Music or SoundCloud (a Spotify song as its copy
         // there), tagged by Valen's own writers, kept in Music/Valen where every player sees them.

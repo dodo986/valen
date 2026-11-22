@@ -2,6 +2,7 @@
 package app.valen.providers.native
 
 import app.valen.audio.SoundcloudAudio
+import app.valen.audio.SoundcloudSession
 import app.valen.audio.SoundcloudTrack
 import app.valen.core.PlaylistCatalog
 import app.valen.core.PlaylistLink
@@ -25,21 +26,21 @@ internal fun SoundcloudTrack.toValenTrack(): Track = Track(
 
 /**
  * SoundCloud sets: a pasted set is public data read with the runtime client id, while the account's
- * own sets need its OAuth token ([oauth], read from the browser's cookie when one is signed in).
- * Reading never opens a browser: with no token the public sets still import, and the account list
- * says what is missing.
+ * own sets need its session ([session], from the browser's cookies when one is signed in; an
+ * expired one is renewed there). Reading never opens a browser: with no session the public sets
+ * still import, and the account list says what is missing.
  */
 class SoundcloudPlaylistCatalog(
     private val audio: SoundcloudAudio,
-    private val oauth: (suspend () -> String?)? = null,
+    private val session: (suspend () -> SoundcloudSession?)? = null,
 ) : PlaylistCatalog {
 
     override val provider: ProviderId = ProviderId.SOUNDCLOUD
 
     override suspend fun playlists(): List<PlaylistRef> {
-        val token = tokenOrNull()
+        val signedIn = sessionOrNull()
             ?: throw IllegalStateException("Sign in to SoundCloud to see your playlists")
-        return audio.accountPlaylists(token).mapNotNull { set ->
+        return audio.accountPlaylists(signedIn).mapNotNull { set ->
             PlaylistRef(
                 name = set.name,
                 trackCount = set.trackCount,
@@ -50,7 +51,7 @@ class SoundcloudPlaylistCatalog(
     }
 
     override suspend fun read(link: PlaylistLink): ReadPlaylist {
-        val set = audio.playlist(link.url, tokenOrNull())
+        val set = audio.playlist(link.url, sessionOrNull())
         if (set.tracks.isEmpty() && set.trackCount > 0) {
             throw IllegalStateException("SoundCloud did not send the songs of that set")
         }
@@ -67,9 +68,9 @@ class SoundcloudPlaylistCatalog(
         )
     }
 
-    /** A public read works without a session; a token helper that cannot answer is no token. */
-    private suspend fun tokenOrNull(): String? = try {
-        oauth?.invoke()?.takeIf { it.isNotBlank() }
+    /** A public read works without a session; a session helper that cannot answer is no session. */
+    private suspend fun sessionOrNull(): SoundcloudSession? = try {
+        session?.invoke()?.takeIf { it.accessToken.isNotBlank() }
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {

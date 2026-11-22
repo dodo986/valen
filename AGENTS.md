@@ -453,6 +453,15 @@ Key invariants:
   `cbc-`/`ctr-encrypted-hls` (DRM). Valen does not decrypt them: `SoundcloudAudio.protectedOnly`
   drops them from search, so the same song on another service is the copy offered, and playing one
   anyway says so in words.
+- **SoundCloud's account token expires daily; it is renewed, never resubmitted stale.**
+  `oauth_token` is a JWT good for a day with an `oauth_refresh_token` beside it. `SoundcloudAudio`
+  renews an expired or refused one at `secure.soundcloud.com/oauth/token` (with the runtime client
+  id) and writes the renewed pair back where it came from — `DesktopHosts.setSoundCloudSession` into
+  the browser's cookie, Android's hidden-page cookie jar — so the web session and Valen stay in
+  step; a renewal that fails says "session expired; sign in again", never a raw 401. The account's
+  sets are listed under `/users/{id}/playlists` (`/me` gives the id; `/me/playlists` answers 404 to
+  these tokens now), and neither a refused nor a missing session blocks importing a public set: the
+  read is retried without it.
 - **Spotify signs in inside Valen's private Chrome.** A sign-in is the only reason a window may
   appear (`connect()` → `DesktopHosts.ensureVisible()`), and replacing the browser bumps
   `DesktopHosts.generation`, which invalidates the attached adapter. Spotify is therefore always
