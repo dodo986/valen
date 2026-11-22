@@ -250,7 +250,7 @@ private fun DrawScope.sung(
             val word = g.words[piece.word]
             val left = ordered.getOrNull(k - 1)?.let { (it.right + piece.left) / 2f } ?: -pad
             val held = word.endMs - word.startMs >= WAVE_MS && piece.count >= 3 && t in word.startMs..(word.endMs + WAVE_TAIL_MS)
-            val up = lift * Motion.Enter.transform(((t - word.startMs).toFloat() / Motion.WordLiftMs).coerceIn(0f, 1f))
+            val up = lift * Motion.Enter.transform(((t - g.motionStarts[piece.word]).toFloat() / Motion.WordLiftMs).coerceIn(0f, 1f))
             if (held) {
                 // A held note: a crest runs through its letters as it is held, carrying a soft glow
                 // along the word. The glow goes down first, so it never washes the letters out.
@@ -283,7 +283,7 @@ private fun DrawScope.sung(
                 val next = ordered[end + 1]
                 val nextWord = g.words[next.word]
                 val nextHeld = nextWord.endMs - nextWord.startMs >= WAVE_MS && next.count >= 3 && t in nextWord.startMs..(nextWord.endMs + WAVE_TAIL_MS)
-                val nextUp = lift * Motion.Enter.transform(((t - nextWord.startMs).toFloat() / Motion.WordLiftMs).coerceIn(0f, 1f))
+                val nextUp = lift * Motion.Enter.transform(((t - g.motionStarts[next.word]).toFloat() / Motion.WordLiftMs).coerceIn(0f, 1f))
                 if (nextHeld || nextUp != up) break
                 end++
             }
@@ -416,6 +416,8 @@ private class Geometry(
     val em: Float,
     val inks: Array<ScribbleInk?>,
 ) {
+    val motionStarts = lyricMotionStarts(words)
+
     /** The band of [row]: from halfway to the row above (or past the top) to halfway to the one below. */
     fun bandTop(row: Int, pad: Float): Float = if (row == 0) -pad else (rowBottom[row - 1] + rowTop[row]) / 2f
     fun bandBottom(row: Int, pad: Float, height: Float): Float = if (row == rows - 1) height + pad else (rowBottom[row] + rowTop[row + 1]) / 2f
@@ -440,6 +442,16 @@ private class Geometry(
     /** In the order they stand, left to right. */
     private val byPlace: Array<List<Piece>> by lazy(LazyThreadSafetyMode.NONE) {
         Array(rows) { r -> pieces.filter { it.row == r }.sortedBy { it.left } }
+    }
+
+    private val sweeps: Array<LyricSweep> by lazy(LazyThreadSafetyMode.NONE) {
+        Array(rows) { row ->
+            LyricSweep(byRow[row].map { piece ->
+                val word = words[piece.word]
+                LyricSweep.Span(piece.left, piece.right, word.startMs, word.endMs,
+                    piece.from, piece.count, lengths[piece.word])
+            }, rtl)
+        }
     }
 
     fun piecesOn(row: Int): List<Piece> = byRow[row]
@@ -473,15 +485,7 @@ private class Geometry(
     fun edge(row: Int, t: Long, feather: Float): Float {
         val list = byRow[row]
         if (list.isEmpty()) return if (rtl) rowLeft[row] - feather else rowRight[row] + feather
-        var edge = if (rtl) rowRight[row] + feather / 2f else rowLeft[row] - feather / 2f
-        for (piece in list) {
-            val s = sung(piece, t)
-            if (s <= 0f) break
-            val span = piece.right - piece.left + feather
-            edge = if (rtl) piece.right + feather / 2f - span * s else piece.left - feather / 2f + span * s
-            if (s < 1f) break
-        }
-        return edge
+        return sweeps[row].edge(t, feather)
     }
 
     companion object {

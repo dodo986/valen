@@ -483,24 +483,40 @@ class LiriqoLyricsTest {
     private fun lyprio() = LyprioEndpoint.of("https://lyprio.example", Base64.getEncoder().encodeToString(ByteArray(32) { 1 }))!!
 
     @Test
-    fun `both platforms get LiriQo before all existing fallbacks`() {
+    fun `both platforms get configured Lyprio then LiriQo before the remaining fallbacks`() {
         val spotify = object : LyricsSource { override val name = "Spotify"; override suspend fun find(query: LyricsQuery): Lyrics? = null }
-        assertEquals(listOf("LiriQo", "Lyprio", "Spotify", "LRCLIB"), LyricsSetup.sources(http, lyprio(), listOf(spotify)).map { it.name })
+        assertEquals(listOf("Lyprio", "LiriQo", "Spotify", "LRCLIB"), LyricsSetup.sources(http, lyprio(), listOf(spotify)).map { it.name })
+        assertEquals(listOf("LiriQo", "Spotify", "LRCLIB"), LyricsSetup.sources(http, null, listOf(spotify)).map { it.name })
     }
 
     @Test
-    fun `a primary hit bypasses fallbacks and a miss falls back to configured Lyprio`() = runBlocking {
+    fun `a Lyprio hit bypasses LiriQo even when only line timed lyrics are found`() = runBlocking {
+        reply = { Reply(body = """{"complete":true,"results":[{"subprovider":"MUSIXMATCH","format":"lrc","lyrics":"[00:01.00]chalk lines"}]}""",
+            headers = mapOf("X-Lyprio-Protocol" to "2")) }
         val book = LyricsBook(LyricsSetup.sources(http, lyprio()))
-        assertEquals(LyricsTiming.Words, (book.lyricsFor(song) as LyricsState.Found).lyrics.timing)
+        val found = (book.lyricsFor(song) as LyricsState.Found).lyrics
+        assertEquals("Lyprio · Musixmatch", found.source)
+        assertEquals(LyricsTiming.Lines, found.timing)
         assertEquals(1, requests.size)
-        requests.clear()
-        reply = { request ->
-            if (request.url.host.startsWith("api.liriqo")) Reply(404, "missing") else Reply(body = """{"complete":true,"results":[{"subprovider":"MUSIXMATCH","format":"lrc","lyrics":"[00:01.00]chalk lines"}]}""",
-                headers = mapOf("X-Lyprio-Protocol" to "2"))
+        assertEquals("lyprio.example", requests.single().url.host)
+    }
+
+    @Test
+    fun `a Lyprio miss or failure reaches LiriQo before the remaining sources`() = runBlocking {
+        for (code in listOf(200, 503)) {
+            requests.clear()
+            reply = { request ->
+                if (request.url.host == "lyprio.example") Reply(code, """{"complete":true,"results":[]}""",
+                    headers = mapOf("X-Lyprio-Protocol" to "2")) else Reply(body = envelope(rich))
+            }
+            val fallback = (LyricsBook(LyricsSetup.sources(http, lyprio())).lyricsFor(song) as LyricsState.Found).lyrics
+            assertEquals("LiriQo · NetEase Cloud Music", fallback.source)
+            // A completed miss expands Lyprio's search to all of its sources before falling back.
+            assertEquals(if (code == 200) 3 else 2, requests.size)
+            assertTrue(requests.dropLast(1).all { it.url.host == "lyprio.example" })
+            assertEquals("lyprio.example", requests.first().url.host)
+            assertTrue(requests.last().url.host.startsWith("api.liriqo"))
         }
-        val fallback = (LyricsBook(LyricsSetup.sources(http, lyprio())).lyricsFor(song) as LyricsState.Found).lyrics
-        assertEquals("Lyprio · Musixmatch", fallback.source)
-        assertEquals(2, requests.size)
     }
 
     @Test
@@ -523,14 +539,14 @@ class LiriqoLyricsTest {
     }
 
     @Test
-    fun `old cached lines and misses cannot bypass LiriQo and are not deleted`(@TempDir dir: Path) = runBlocking {
+    fun `old cached lines and misses cannot bypass the new source order and are not deleted`(@TempDir dir: Path) = runBlocking {
         val key = LyricsBook.keyOf(song)
         val previous = Lyrics(listOf(LyricLine(1000, 2000, "chalk")), LyricsTiming.Lines, "LRCLIB")
-        for ((i, saved) in listOf(previous, null, previous, null, previous, null, previous, null).withIndex()) {
+        for ((i, saved) in listOf(previous, null, previous, null, previous, null, previous, null, previous, null).withIndex()) {
             val folder = dir.resolve("case-$i")
             val old = DiskLyricsStore(when (i / 2) {
                 0 -> folder; 1 -> folder.resolve("liriqo-v1"); 2 -> folder.resolve("liriqo-v2")
-                else -> folder.resolve("liriqo-original-v1")
+                3 -> folder.resolve("liriqo-original-v1"); else -> folder.resolve("liriqo-original-v2")
             })
             old.write(key, saved)
             val current = LyricsSetup.store(folder)

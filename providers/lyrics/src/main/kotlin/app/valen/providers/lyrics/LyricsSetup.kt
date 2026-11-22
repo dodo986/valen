@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
 object LyricsSetup {
 
     /**
-     * LiriQo first, then Lyprio when set up, music services' own lyrics ([services]: Spotify's
+     * Lyprio when set up, then LiriQo, music services' own lyrics ([services]: Spotify's
      * card, for a signed-in account), then LRCLIB. Both platforms use this same chain.
      */
     fun sources(http: OkHttpClient, lyprio: LyprioEndpoint?, services: List<LyricsSource> = emptyList()): List<LyricsSource> = buildList {
@@ -35,18 +35,17 @@ object LyricsSetup {
             .callTimeout(30, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .build()
-        add(LiriqoLyrics(client))
         if (lyprio != null) add(LyprioLyrics(client, lyprio))
+        add(LiriqoLyrics(client))
         addAll(services)
         add(LrclibLyrics(client))
     }
 
     /**
-     * Where LiriQo's answers are kept. The folder carries a version: a change in the way its times
-     * are read (the reverted latency experiment, and now the cue-level repair) must not be undone by
-     * an answer an older reader kept.
+     * The folder carries the source priority: older cached LiriQo answers and misses must not
+     * bypass Lyprio now that it is asked first. Previous folders stay untouched.
      */
-    fun store(dir: Path): LyricsStore = DiskLyricsStore(dir.resolve("liriqo-original-v2"))
+    fun store(dir: Path): LyricsStore = DiskLyricsStore(dir.resolve("lyprio-first-v1"))
 
     /** Lyprio's endpoint from the environment, the config file, or the build; null when none is set up. */
     fun lyprio(

@@ -387,6 +387,88 @@ class ShellSmokeTest {
     }
 
     @Test
+    @org.junit.jupiter.api.Timeout(180)
+    fun `overlapping line windows finish their word animation before the next phrase`() {
+        val source = app.valen.core.Lyrics(listOf(
+            app.valen.core.LyricLine(0, 5_000, "lanterns shimmer softly"),
+            app.valen.core.LyricLine(2_500, 7_500, "paper moons drift home"),
+            app.valen.core.LyricLine(4_000, 9_000, "chalk stars glow"),
+        ), app.valen.core.LyricsTiming.Lines, "LiriQo fixture")
+        val book = app.valen.core.LyricsBook(listOf(object : app.valen.core.LyricsSource {
+            override val name = "LiriQo fixture"
+            override suspend fun find(query: app.valen.core.LyricsQuery) = source
+        }))
+        val out = java.io.File("build/screens").also { it.mkdirs() }
+        for ((width, height) in listOf(1600 to 900, 2200 to 1200, 390 to 844)) {
+            inApp(width, height, lyrics = book) { coordinator, playlists ->
+                runBlocking {
+                    coordinator.play(coordinator.unifiedSearch("warm up").tracks.first())
+                    coordinator.toggle()
+                    coordinator.setLyricsShown(true)
+                }
+                setContent { ValenApp(coordinator, playlists, "now-playing") }
+                settleUntil(5_000) { runCatching { onNodeWithText("lanterns shimmer softly").assertExists() }.isSuccess }
+                runBlocking { coordinator.seek(2_400) }
+                settleUntil { coordinator.snapshot.value?.positionMs == 2_400L }
+                settle(1_200)
+                javax.imageio.ImageIO.write(onRoot().captureToImage().toAwtImage(), "png",
+                    java.io.File(out, "line-overlap-${width}x$height.png"))
+                // Seeking the next phrase still uses the source's original start, then seeking
+                // back renders the same estimated window; neither action rewrites the cache.
+                onNodeWithText("paper moons drift home").performSemanticsAction(SemanticsActions.OnClick)
+                settleUntil { coordinator.snapshot.value?.positionMs == 2_500L }
+                assertEquals(2_500L, coordinator.snapshot.value?.positionMs)
+                runBlocking { coordinator.seek(1_000) }
+                settleUntil { coordinator.snapshot.value?.positionMs == 1_000L }
+                assertEquals(5_000L, source.lines.first().endMs)
+                assertTrue(source.lines.all { it.words.isEmpty() })
+            }
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(120)
+    fun `lyrics follow starts without kicking upcoming rows backwards`() {
+        val first = "lanterns shimmer softly while paper moons drift across the chalk sky and silver rivers carry their light home"
+        val source = app.valen.core.Lyrics(listOf(
+            app.valen.core.LyricLine(0, 2_000, first),
+            app.valen.core.LyricLine(2_000, 4_000, "paper stars glow"),
+            app.valen.core.LyricLine(4_000, 6_000, "silver rivers shine"),
+            app.valen.core.LyricLine(6_000, 8_000, "quiet lanterns drift"),
+            app.valen.core.LyricLine(8_000, 10_000, "chalk moons settle"),
+        ), app.valen.core.LyricsTiming.Lines, "follow fixture")
+        val book = app.valen.core.LyricsBook(listOf(object : app.valen.core.LyricsSource {
+            override val name = "follow fixture"
+            override suspend fun find(query: app.valen.core.LyricsQuery) = source
+        }))
+        inApp(1600, 900, lyrics = book) { coordinator, playlists ->
+            runBlocking {
+                coordinator.play(coordinator.unifiedSearch("warm up").tracks.first())
+                coordinator.toggle()
+                coordinator.setLyricsShown(true)
+            }
+            setContent { ValenApp(coordinator, playlists, "now-playing") }
+            settleUntil(5_000) { onAllNodesWithText(first).fetchSemanticsNodes().isNotEmpty() }
+            runBlocking { coordinator.seek(0) }
+            settleUntil { coordinator.snapshot.value?.positionMs == 0L }
+            settle(1_500)
+            fun rowY() = onNodeWithText("quiet lanterns drift").fetchSemanticsNode().boundsInRoot.top
+            val positions = mutableListOf(rowY())
+            runBlocking { coordinator.seek(2_000) }
+            // Wait for the real player poll without stepping the animation before its first frame.
+            waitUntil(timeoutMillis = 3_000) { coordinator.snapshot.value?.positionMs == 2_000L }
+            repeat(20) {
+                mainClock.advanceTimeByFrame()
+                positions += rowY()
+            }
+            val steps = positions.zipWithNext().map { (a, b) -> b - a }
+            assertTrue(steps.maxOrNull()!! < 4f, "upcoming rows must not kick down before following: $steps")
+            assertTrue(steps.minOrNull()!! > -25f, "the scroll must not jump upwards: $steps")
+            assertTrue(positions.last() < positions.first() - 30f, "the list actually followed the next phrase")
+        }
+    }
+
+    @Test
     fun `settings turn the lyrics on, and the pen marks and moving words off`() = inApp(1600, 900) { coordinator, playlists ->
         setContent { ValenApp(coordinator, playlists, "settings") }
         settle(1_200L)
