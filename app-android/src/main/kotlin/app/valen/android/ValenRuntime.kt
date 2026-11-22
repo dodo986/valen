@@ -220,7 +220,7 @@ object ValenRuntime {
                     write = { text -> runCatching { File(app.filesDir, "listening.json").writeText(text) } },
                 ),
             ),
-            // LiriQo, then configured Lyprio, Spotify and LRCLIB; kept in the cache.
+            // Lyprio (with LiriQo behind an untimed answer), Spotify and LRCLIB; kept in the cache.
             lyrics = LyricsBook(
                 LyricsSetup.sources(
                     http,

@@ -27,25 +27,27 @@ import java.util.concurrent.TimeUnit
 object LyricsSetup {
 
     /**
-     * Lyprio when set up, then LiriQo, music services' own lyrics ([services]: Spotify's
-     * card, for a signed-in account), then LRCLIB. Both platforms use this same chain.
+     * Lyprio when set up, with LiriQo behind it for the songs Lyprio cannot time word by word, then
+     * music services' own lyrics ([services]: Spotify's card, for a signed-in account), then
+     * LRCLIB. Both platforms use this same chain.
      */
     fun sources(http: OkHttpClient, lyprio: LyprioEndpoint?, services: List<LyricsSource> = emptyList()): List<LyricsSource> = buildList {
         val client = http.newBuilder()
             .callTimeout(30, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .build()
-        if (lyprio != null) add(LyprioLyrics(client, lyprio))
-        add(LiriqoLyrics(client))
+        val liriqo = LiriqoLyrics(client)
+        if (lyprio != null) add(WordTimedFallback(LyprioLyrics(client, lyprio), liriqo)) else add(liriqo)
         addAll(services)
         add(LrclibLyrics(client))
     }
 
     /**
-     * The folder carries the source priority: older cached LiriQo answers and misses must not
-     * bypass Lyprio now that it is asked first. Previous folders stay untouched.
+     * The folder carries the selection rule: an older answer (or miss) must not bypass the LiriQo
+     * word-timing fallback, and an untimed Lyprio answer kept before it existed is exactly what
+     * must be looked up again. Previous folders stay untouched.
      */
-    fun store(dir: Path): LyricsStore = DiskLyricsStore(dir.resolve("lyprio-first-v1"))
+    fun store(dir: Path): LyricsStore = DiskLyricsStore(dir.resolve("lyprio-timed-v1"))
 
     /** Lyprio's endpoint from the environment, the config file, or the build; null when none is set up. */
     fun lyprio(

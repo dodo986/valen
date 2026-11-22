@@ -16,9 +16,10 @@ import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
- * The desktop's lyrics: LiriQo, then Lyprio when set up (the environment, `lyprio.json` beside
- * settings.json, or the build's own endpoint), then Spotify's own for a signed-in account, then
- * LRCLIB, kept under `$XDG_CACHE_HOME/valen/lyrics`.
+ * The desktop's lyrics: Lyprio when set up (the environment, `lyprio.json` beside settings.json,
+ * or the build's own endpoint), with LiriQo behind it for the songs Lyprio cannot time word by
+ * word, then Spotify's own for a signed-in account, then LRCLIB, kept under
+ * `$XDG_CACHE_HOME/valen/lyrics`.
  *
  * Development: `VALEN_CAPTURE_LYRICS=<file>` answers every song with that file's words (TTML,
  * MLX, LRC or plain text, read by its extension) ahead of the real sources, and keeps nothing,

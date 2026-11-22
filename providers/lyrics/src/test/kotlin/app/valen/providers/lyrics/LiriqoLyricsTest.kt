@@ -482,23 +482,63 @@ class LiriqoLyricsTest {
 
     private fun lyprio() = LyprioEndpoint.of("https://lyprio.example", Base64.getEncoder().encodeToString(ByteArray(32) { 1 }))!!
 
+    private fun lyprioResult(text: String, format: String, sync: String, sub: String = "MUSIXMATCH") =
+        """{"subprovider":"$sub","format":"$format","syncType":"$sync","lyrics":${quote(text)}}"""
+
+    private val wordMlx = """{"version":2,"song":{"title":"Paper Moons","artist":"The Walls"},"lines":[{"startMs":1000,"endMs":5000,"words":[{"text":"chalk ","startMs":1234,"endMs":1765},{"text":"lines","startMs":2200,"endMs":3456}]}]}"""
+
+    private val lineLrc = "[00:01.00]chalk lines"
+
     @Test
-    fun `both platforms get configured Lyprio then LiriQo before the remaining fallbacks`() {
+    fun `both platforms get Lyprio first, with LiriQo behind its untimed answers, before the remaining fallbacks`() {
         val spotify = object : LyricsSource { override val name = "Spotify"; override suspend fun find(query: LyricsQuery): Lyrics? = null }
-        assertEquals(listOf("Lyprio", "LiriQo", "Spotify", "LRCLIB"), LyricsSetup.sources(http, lyprio(), listOf(spotify)).map { it.name })
+        assertEquals(listOf("Lyprio", "Spotify", "LRCLIB"), LyricsSetup.sources(http, lyprio(), listOf(spotify)).map { it.name })
         assertEquals(listOf("LiriQo", "Spotify", "LRCLIB"), LyricsSetup.sources(http, null, listOf(spotify)).map { it.name })
     }
 
     @Test
-    fun `a Lyprio hit bypasses LiriQo even when only line timed lyrics are found`() = runBlocking {
-        reply = { Reply(body = """{"complete":true,"results":[{"subprovider":"MUSIXMATCH","format":"lrc","lyrics":"[00:01.00]chalk lines"}]}""",
+    fun `a word timed Lyprio hit does not ask LiriQo`() = runBlocking {
+        reply = { Reply(body = """{"complete":true,"results":[${lyprioResult(wordMlx, "mlx", "word")}]}""",
             headers = mapOf("X-Lyprio-Protocol" to "2")) }
-        val book = LyricsBook(LyricsSetup.sources(http, lyprio()))
-        val found = (book.lyricsFor(song) as LyricsState.Found).lyrics
+        val found = (LyricsBook(LyricsSetup.sources(http, lyprio())).lyricsFor(song) as LyricsState.Found).lyrics
         assertEquals("Lyprio · Musixmatch", found.source)
-        assertEquals(LyricsTiming.Lines, found.timing)
+        assertEquals(LyricsTiming.Words, found.timing)
         assertEquals(1, requests.size)
         assertEquals("lyprio.example", requests.single().url.host)
+    }
+
+    @Test
+    fun `untimed Lyprio words are replaced by LiriQo's word timing`() = runBlocking {
+        reply = { request ->
+            if (request.url.host == "lyprio.example") {
+                Reply(body = """{"complete":true,"results":[${lyprioResult(lineLrc, "lrc", "line")}]}""",
+                    headers = mapOf("X-Lyprio-Protocol" to "2"))
+            } else {
+                Reply(body = envelope(rich))
+            }
+        }
+        val found = (LyricsBook(LyricsSetup.sources(http, lyprio())).lyricsFor(song) as LyricsState.Found).lyrics
+        assertEquals("LiriQo · NetEase Cloud Music", found.source)
+        assertEquals(LyricsTiming.Words, found.timing)
+        assertEquals(2, requests.size)
+        assertEquals("lyprio.example", requests.first().url.host)
+        assertTrue(requests.last().url.host.startsWith("api.liriqo"))
+    }
+
+    @Test
+    fun `untimed Lyprio words stand when LiriQo is no better timed`() = runBlocking {
+        reply = { request ->
+            if (request.url.host == "lyprio.example") {
+                Reply(body = """{"complete":true,"results":[${lyprioResult(lineLrc, "lrc", "line")}]}""",
+                    headers = mapOf("X-Lyprio-Protocol" to "2"))
+            } else {
+                Reply(body = envelope("""{"provider":"netease","syncLevel":"line","timed":[{"text":"chalk lines","start":1000,"end":2000}]}"""))
+            }
+        }
+        val found = (LyricsBook(LyricsSetup.sources(http, lyprio())).lyricsFor(song) as LyricsState.Found).lyrics
+        assertEquals("Lyprio · Musixmatch", found.source)
+        assertEquals(LyricsTiming.Lines, found.timing)
+        assertEquals(2, requests.size)
     }
 
     @Test

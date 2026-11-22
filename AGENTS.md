@@ -44,7 +44,7 @@ Gradle call in a fresh shell.
 | Core tests | `./gradlew :core:jvmTest` |
 | UI click-through tests (fake services, no network, ~1 min) | `./gradlew :ui:jvmTest` |
 | Audio/providers tests | `./gradlew :libs:audio:test :providers:soundcloud:test :host:desktop:test` |
-| Lyrics sources (local server stands in for Lyprio and LRCLIB) | `./gradlew :providers:lyrics:test` |
+| Lyrics sources (local servers stand in for Lyprio, LiriQo and LRCLIB) | `./gradlew :providers:lyrics:test` |
 | Updater (local server stands in for GitHub) | `./gradlew :libs:update:test` |
 | This build's version and number | `./gradlew -q printVersion` (the version lives in `gradle.properties`, `valen.version`) |
 | A release | push a `v1.2.3[-alpha.N]` tag; `.github/workflows/release.yml`, see `RELEASING.md` |
@@ -120,7 +120,7 @@ valen [--width N] [--height N] [--route home|search|playlists|import|now-playing
 | `VALEN_DISCORD_APP_ID` | a Discord application of one's own, instead of Valen's built-in id |
 | `VALEN_HOMEPAGE` | an `https://` page for the card's "Get Valen" button (default <https://github.com/dodo986/valen>) |
 | `VALEN_UPDATE_REPO` | `owner/name` whose GitHub releases are the updates (default `dodo986/valen`; also a build property) |
-| `VALEN_LYPRIO_URL`, `VALEN_LYPRIO_KEY` | Lyprio's address and signing key (also `LYPRIO_BASE_URL`/`LYPRIO_HMAC_KEY`, or `$XDG_CONFIG_HOME/valen/lyprio.json`); unset means LRCLIB only |
+| `VALEN_LYPRIO_URL`, `VALEN_LYPRIO_KEY` | Lyprio's address and signing key (also `LYPRIO_BASE_URL`/`LYPRIO_HMAC_KEY`, or `$XDG_CONFIG_HOME/valen/lyprio.json`); unset means no Lyprio (LiriQo, service lyrics and LRCLIB still answer). Release builds take the pair from repository secrets |
 
 ---
 
@@ -162,8 +162,9 @@ providers/spotify        Spotify adapter over the vendored Web Player
 providers/native         YouTube Music + SoundCloud adapters on BOTH platforms (no browser at all);
                  LocalProvider + FfprobeTags (this device's files and playlists; Android reads tags
                  with app-android's AndroidTags)
-providers/lyrics LyprioLyrics (signed, protocol 2 → 1), LrclibLyrics, LyricsSetup (where Lyprio's
-                 address and key come from), DiskLyricsStore; a JVM library both apps use
+providers/lyrics LyprioLyrics (signed, protocol 2 → 1), LiriqoLyrics, LrclibLyrics, LyricsSetup
+                 (where Lyprio's address and key come from), WordTimedFallback (LiriQo behind an
+                 untimed Lyprio answer), DiskLyricsStore; a JVM library both apps use
 providers/ytmusic,soundcloud   the older page-based adapters (hidden WebView); no app builds them
                  now, kept with their page scripts and tests
 libs/update/     GithubUpdater (look with ETags, pick the newest release that fits, download with
@@ -353,8 +354,10 @@ Key invariants:
   session only when the queue is empty, the service holds its wake lock while a song starts, and it
   republishes only what the session's own clock could not predict.
 - **Lyrics are looked up by song, not by service, and Lyprio's key is never in the source.**
-  `LyricsBook` (on the coordinator) asks its sources in order (Lyprio when set up, Spotify's own
-  card through `LyricsCatalog`/`ServiceLyrics`, then LRCLIB), keyed by `recordingKey` and the song's length in 4 s steps (`LyricsBook.keyOf`: a music video's intro must never take the album version's timing); a failure is
+  `LyricsBook` (on the coordinator) asks its sources in order (Lyprio when set up — with LiriQo
+  behind it through `WordTimedFallback` for the songs Lyprio cannot time word by word: a word-timed
+  answer wins, and a line-timed Lyprio answer stands when LiriQo is no better — Spotify's own card
+  through `LyricsCatalog`/`ServiceLyrics`, then LRCLIB), keyed by `recordingKey` and the song's length in 4 s steps (`LyricsBook.keyOf`: a music video's intro must never take the album version's timing); a failure is
   `Failed` and never remembered as a miss (a miss is kept 3 days). Spotify is asked only signed in
   and with its Web Player already up: `SpotifyProvider.serviceLyrics` throws `LyricsSkipped` rather
   than wake the page, and the desktop's `RetryingProvider` asks only an adapter already attached
@@ -364,7 +367,9 @@ Key invariants:
   five; a mark's gesture is chosen from the word's own kind — held, repeated, shouted, short, long —
   never at random).
   Lyprio's address and HMAC key come only from the environment, `lyprio.json`, or a build's
-  own properties (`LyricsSetup`), never from the source. The pen marks only word-timed lyrics, chosen from the song's key
+  own properties (`LyricsSetup`), never from the source. Release builds take the pair from
+  repository secrets and the release workflow warns when they are missing, so a shipped build does
+  not silently lose the primary source. The pen marks only word-timed lyrics, chosen from the song's key
   (`markWords`), and every mark is drawn from the song's time, so a seek back unwrites it.
 - **No frame loops.** The UI never asks for frames on a timer it does not need: the wash drifts on
   a 200 ms `delay` (not `withFrameNanos`), the glass orbit goes round twice when a song starts and
