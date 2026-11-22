@@ -131,11 +131,13 @@ core/            Track, MusicProvider, ProviderSignIn, PlaybackCoordinator (the 
                  facade), Taste.kt (the learned taste: evidence, trust, disliked/hidden),
                  MixEngine.kt (SmartMixer: seeds, related-artist expansion, deep gates, quotas,
                  spread), Listening.kt (listening log, generated provenance, stats), Artists.kt
-                 (ArtistDirectory: one artist page from every service by `artistKey`), Lyrics.kt
+                 (ArtistDirectory: one artist page from every service by `artistKey`, and the
+                 services' own set search), Lyrics.kt
                  (model, LyricsSource, LyricsBook), LyricsFormats.kt (TTML, MLX,
                  LRC readers), Recordings.kt (cross-service recording identity), Playlists.kt (the
                  app-owned playlist library), PlaylistLinks/TrackMatcher/PlaylistImporter/
-                 PlaylistCatalog (import), AppSettings, settings store
+                 PlaylistCatalog (import) + PlaylistSearch (sets by name), AppSettings, settings
+                 store
 ui/              Compose Multiplatform design system + screens, shared by both platforms
   theme/         Color.kt, Type.kt, Dimens.kt, Shapes.kt, Motion.kt  ← all design tokens live here
   components/    one file per component (Sidebar, PlayerBar, MiniPlayer, ResultRow, Artwork,
@@ -436,7 +438,8 @@ Key invariants:
   of our own formatting in `Locale.ROOT` (the FFmpeg graph does).
 - **Artist pages are put together from every service, and only from the same artist.**
   `core/Artists.kt`: adapters that have artist pages implement `ArtistCatalog` (Spotify through its
-  Web Player catalogue, YouTube Music through its browse pages; SoundCloud has none);
+  Web Player catalogue, YouTube Music through its browse pages; SoundCloud has none — it finds its
+  sets instead, see the SoundCloud bullet below);
   `PlaybackCoordinator.artists` (`ArtistDirectory`) asks every usable one at once and merges by
   `artistKey`. A service's artist counts only when its name is the same — never "the closest one" —
   so a tribute band is never mixed in. Songs on several services appear once and play from the copy
@@ -453,6 +456,14 @@ Key invariants:
   `cbc-`/`ctr-encrypted-hls` (DRM). Valen does not decrypt them: `SoundcloudAudio.protectedOnly`
   drops them from search, so the same song on another service is the copy offered, and playing one
   anyway says so in words.
+- **SoundCloud has no artist pages, but it does search its own sets.** Its accounts are people,
+  not artists, so `SoundcloudNativeProvider` is not an `ArtistCatalog`; it is a `PlaylistSearch`
+  (`core/PlaylistCatalog.kt`), and `ArtistDirectory.searchPlaylists` asks it beside the catalogues'
+  own `findPlaylists`. `/search/playlists` is public — the runtime `client_id` is all it takes — so
+  search shows SoundCloud's playlists and albums signed out. Albums come back as sets (SoundCloud
+  keeps both as one kind), and each row carries the set's own page address, which
+  `SoundcloudPlaylistCatalog.read` resolves for the page and for import; a set with no address is
+  left out. A failed set search loses only its answer — it is never named as a missing artist page.
 - **SoundCloud's account token expires daily; it is renewed, never resubmitted stale.**
   `oauth_token` is a JWT good for a day with an `oauth_refresh_token` beside it. `SoundcloudAudio`
   renews an expired or refused one at `secure.soundcloud.com/oauth/token` (with the runtime client

@@ -36,6 +36,8 @@ data class SoundcloudPlaylist(
     val artworkUrl: String?,
     val trackCount: Int,
     val permalink: String?,
+    /** The account that made the set ("overtonight"); null where SoundCloud did not say. */
+    val owner: String? = null,
     val tracks: List<SoundcloudTrack> = emptyList(),
     /** The set says it holds more rows than SoundCloud sent: a private or region-locked part. */
     val truncated: Boolean = false,
@@ -92,6 +94,19 @@ class SoundcloudAudio(
     }
 
     /**
+     * Sets whose name matches [query], in SoundCloud's own order: playlists and albums, which it
+     * keeps as one kind (`kind: "playlist"`, `is_album`). A search is public data, so the runtime
+     * client id is all it takes here — the same request answers signed in or out.
+     */
+    suspend fun searchPlaylists(query: String, limit: Int): List<SoundcloudPlaylist> = withContext(Dispatchers.IO) {
+        val json = api(
+            "https://api-v2.soundcloud.com/search/playlists" +
+                "?q=${encode(query)}&limit=${limit.coerceIn(1, 50)}&offset=0&linked_partitioning=0",
+        )
+        (json["collection"] as? JsonArray).orEmpty().mapNotNull { it.asSetOrNull() }
+    }
+
+    /**
      * One set by its page address. A public set needs nothing but the runtime client id; a
      * [session] also reads a private set the account owns, and a refused session is retried
      * anonymously so a stale cookie never blocks importing a public set.
@@ -121,6 +136,7 @@ class SoundcloudAudio(
             artworkUrl = artwork(resolved.str("artwork_url")),
             trackCount = maxOf(declared, tracks.size),
             permalink = resolved.str("permalink_url"),
+            owner = (resolved["user"] as? JsonObject)?.str("username"),
             tracks = tracks,
             truncated = declared > tracks.size,
         )
@@ -384,7 +400,7 @@ class SoundcloudAudio(
         )
     }
 
-    /** One set of an account listing, without its songs: a row only needs the address and the name. */
+    /** One set of an account listing or a search answer, without its songs: a row only needs the address and the name. */
     private fun JsonElement.asSetOrNull(): SoundcloudPlaylist? {
         val row = this as? JsonObject ?: return null
         val kind = row.str("kind")
@@ -396,6 +412,7 @@ class SoundcloudAudio(
             artworkUrl = artwork(row.str("artwork_url")),
             trackCount = row["track_count"]?.jsonPrimitive?.intOrNull ?: 0,
             permalink = row.str("permalink_url"),
+            owner = (row["user"] as? JsonObject)?.str("username"),
         )
     }
 

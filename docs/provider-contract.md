@@ -101,6 +101,8 @@ interface ArtistCatalog {          // :core, beside MusicProvider
     suspend fun findArtists(query: String, limit: Int = 6): List<ServiceArtist>
     suspend fun artist(id: String): ArtistProfile      // top songs (with plays), releases, playlists, related
     suspend fun release(id: String): ReleaseTracks     // an album / single and its songs
+    suspend fun findReleases(query: String, limit: Int = 8): List<Release>          // default: none
+    suspend fun findPlaylists(query: String, limit: Int = 8): List<ServicePlaylist> // default: none
 }
 ```
 
@@ -109,6 +111,24 @@ every catalogue whose service can be used now (a signed-out Spotify is left out)
 artist only when its name is the same as the one asked for, and merges the pages: each recording
 once (from the copy that plays here), each release title once, related artists by name. A wrapper
 (`RetryingProvider`) passes the interface through to the adapter it holds.
+
+### Playlist search
+
+A service can find its own sets by name without having artist pages:
+
+```kotlin
+interface PlaylistSearch {         // :core, beside ArtistCatalog
+    val provider: ProviderId
+    suspend fun findPlaylists(query: String, limit: Int = 8): List<ServicePlaylist>
+}
+```
+
+SoundCloud implements it: its API's `search/playlists` is public data (the runtime `client_id` is
+all it takes), so search shows its playlists and albums signed out, and each one carries a
+`PlaylistLink` that `PlaylistCatalog.read` opens for import. `ArtistDirectory.searchPlaylists`
+asks both kinds — the artist catalogues' `findPlaylists` and every `PlaylistSearch` — at once,
+interleaves them in the person's order, and one service that fails loses only its own answer (and
+is not recorded as a missing artist page either). An adapter without such a search is not asked.
 
 ## Native playback (YouTube Music and SoundCloud, desktop and Android)
 

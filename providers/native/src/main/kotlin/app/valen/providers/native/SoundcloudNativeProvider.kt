@@ -9,6 +9,7 @@ import app.valen.core.MusicProvider
 import app.valen.core.PlaylistCatalog
 import app.valen.core.PlaylistLink
 import app.valen.core.PlaylistRef
+import app.valen.core.PlaylistSearch
 import app.valen.core.PlayerSnapshot
 import app.valen.core.ProviderEvent
 import app.valen.core.ProviderId
@@ -16,6 +17,7 @@ import app.valen.core.EffectSupport
 import app.valen.core.SoundEffects
 import app.valen.core.ProviderSignIn
 import app.valen.core.ReadPlaylist
+import app.valen.core.ServicePlaylist
 import app.valen.core.SessionState
 import app.valen.core.Track
 import kotlinx.coroutines.flow.SharedFlow
@@ -27,6 +29,9 @@ import kotlinx.coroutines.flow.StateFlow
  *
  * The API's `client_id` is read from SoundCloud's page at runtime, never stored in the app.
  * Signing in, when the user asks for it, still goes through the private Chrome; playback does not.
+ *
+ * It has no artist pages (SoundCloud's are accounts, not artists) but it does find its own sets by
+ * name ([PlaylistSearch]), which is what puts SoundCloud's playlists and albums in search results.
  */
 class SoundcloudNativeProvider(
     private val signIn: ProviderSignIn,
@@ -34,7 +39,7 @@ class SoundcloudNativeProvider(
     private val audio: SoundcloudAudio,
     /** The account's session from the browser's cookies, when one is signed in; never stored. */
     session: (suspend () -> SoundcloudSession?)? = null,
-) : MusicProvider, PlaylistCatalog {
+) : MusicProvider, PlaylistCatalog, PlaylistSearch {
 
     override val id: ProviderId = ProviderId.SOUNDCLOUD
 
@@ -45,6 +50,9 @@ class SoundcloudNativeProvider(
     override suspend fun playlists(): List<PlaylistRef> = catalog.playlists()
 
     override suspend fun read(link: PlaylistLink): ReadPlaylist = catalog.read(link)
+
+    override suspend fun findPlaylists(query: String, limit: Int): List<ServicePlaylist> =
+        catalog.findPlaylists(query, limit)
 
     override val session: StateFlow<SessionState> get() = signIn.state
 

@@ -7,8 +7,10 @@ import app.valen.audio.SoundcloudTrack
 import app.valen.core.PlaylistCatalog
 import app.valen.core.PlaylistLink
 import app.valen.core.PlaylistRef
+import app.valen.core.PlaylistSearch
 import app.valen.core.ProviderId
 import app.valen.core.ReadPlaylist
+import app.valen.core.ServicePlaylist
 import app.valen.core.Track
 import kotlinx.coroutines.CancellationException
 
@@ -29,13 +31,30 @@ internal fun SoundcloudTrack.toValenTrack(): Track = Track(
  * own sets need its session ([session], from the browser's cookies when one is signed in; an
  * expired one is renewed there). Reading never opens a browser: with no session the public sets
  * still import, and the account list says what is missing.
+ *
+ * Sets are also found by name ([PlaylistSearch]): that search is public data too, so the search
+ * screen has SoundCloud's playlists and albums signed out, each with the address [read] opens.
  */
 class SoundcloudPlaylistCatalog(
     private val audio: SoundcloudAudio,
     private val session: (suspend () -> SoundcloudSession?)? = null,
-) : PlaylistCatalog {
+) : PlaylistCatalog, PlaylistSearch {
 
     override val provider: ProviderId = ProviderId.SOUNDCLOUD
+
+    /** SoundCloud's own order; albums come back here too, as it keeps both as one kind of set. */
+    override suspend fun findPlaylists(query: String, limit: Int): List<ServicePlaylist> =
+        audio.searchPlaylists(query, limit).mapNotNull { set ->
+            ServicePlaylist(
+                provider = provider,
+                id = set.id,
+                title = set.name,
+                owner = set.owner,
+                artworkUrl = set.artworkUrl,
+                // Without a page address the set could not be opened: leave it out.
+                link = PlaylistLink(provider, set.id, set.permalink ?: return@mapNotNull null),
+            )
+        }
 
     override suspend fun playlists(): List<PlaylistRef> {
         val signedIn = sessionOrNull()

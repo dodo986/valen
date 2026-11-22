@@ -46,3 +46,15 @@ data class PlaylistChoices(
     val playlists: List<PlaylistRef> = emptyList(),
     val error: String? = null,
 )
+
+/**
+ * A service that can find its own sets by name without having artist pages (SoundCloud). Optional
+ * like [PlaylistCatalog]: a service without such a search is simply not asked. [ServicePlaylist.link]
+ * must be able to read the set again, so the search result opens and imports by the same path.
+ */
+interface PlaylistSearch {
+    val provider: ProviderId
+
+    /** Playlists and albums matching [query], best first. */
+    suspend fun findPlaylists(query: String, limit: Int = 8): List<ServicePlaylist>
+}

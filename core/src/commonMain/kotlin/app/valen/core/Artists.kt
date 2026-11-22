@@ -184,6 +184,8 @@ class ArtistDirectory(
     private val priority: () -> List<ProviderId>,
     /** Whether a song can be played here now (its service is usable). */
     private val playable: (Track) -> Boolean,
+    /** Services that find their sets by name but have no artist pages (SoundCloud). */
+    private val playlistSearches: () -> List<PlaylistSearch> = { emptyList() },
     private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
     private val pages = LinkedHashMap<String, Pair<ArtistView, Long>>()
@@ -232,14 +234,42 @@ class ArtistDirectory(
         }.take(limit)
     }
 
-    /** Playlists matching [query] on every service, in the same order as [searchReleases]. */
+    /**
+     * Playlists matching [query] on every service, in the same order as [searchReleases]: the
+     * services with artist pages answer with [ArtistCatalog.findPlaylists], the ones that only
+     * search their sets with [PlaylistSearch] (SoundCloud). One failing service loses only its own
+     * answer; a playlist search never counts as a missing artist page.
+     */
     suspend fun searchPlaylists(query: String, limit: Int = 8): List<ServicePlaylist> {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
-        return interleaved(askAll { it.findPlaylists(q, limit) })
+        val answers = coroutineScope {
+            val withPages = catalogs().map { catalog ->
+                async { catalog.provider to quietly { catalog.findPlaylists(q, limit) } }
+            }
+            val setsOnly = playlistSearches().map { search ->
+                async { search.provider to quietly { search.findPlaylists(q, limit) } }
+            }
+            (withPages + setsOnly).awaitAll()
+                .groupBy({ it.first }, { it.second })
+                .mapValues { (_, lists) -> lists.filterNotNull().flatten().takeIf { it.isNotEmpty() } }
+        }
+        return interleaved(answers)
             .distinctBy { it.provider to it.id }
             .take(limit)
     }
+
+    /** A catalogue question that can only lose its own answer: slow, refused or failed is "none". */
+    private suspend fun <T> quietly(ask: suspend () -> T?): T? =
+        try {
+            withTimeout(ASK_TIMEOUT_MS) { ask() }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
 
     /** Each service's first, in the person's order, then each one's second, and so on. */
     private fun <T> interleaved(answers: Map<ProviderId, List<T>?>): List<T> {

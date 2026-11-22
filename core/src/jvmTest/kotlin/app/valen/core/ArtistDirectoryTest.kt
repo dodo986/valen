@@ -16,6 +16,8 @@ class ArtistDirectoryTest {
         val profiles: Map<String, ArtistProfile>,
         val releases: Map<String, ReleaseTracks> = emptyMap(),
         var fail: String? = null,
+        /** What this service's playlist search answers (none: the interface's default). */
+        val foundPlaylists: List<ServicePlaylist> = emptyList(),
     ) : ArtistCatalog {
         var opened = 0
         override suspend fun findArtists(query: String, limit: Int) = artists.filter { it.name.contains(query, ignoreCase = true) }
@@ -25,6 +27,22 @@ class ArtistDirectoryTest {
             return profiles.getValue(id)
         }
         override suspend fun release(id: String) = releases.getValue(id)
+        override suspend fun findPlaylists(query: String, limit: Int) =
+            foundPlaylists.filter { it.title.contains(query, ignoreCase = true) }.take(limit)
+    }
+
+    /** A service with a set search but no artist pages (SoundCloud's shape). */
+    private class FakeSearcher(
+        override val provider: ProviderId,
+        val sets: List<ServicePlaylist>,
+        var fail: String? = null,
+    ) : PlaylistSearch {
+        var asked = 0
+        override suspend fun findPlaylists(query: String, limit: Int): List<ServicePlaylist> {
+            asked++
+            fail?.let { error(it) }
+            return sets.filter { it.title.contains(query, ignoreCase = true) }.take(limit)
+        }
     }
 
     private fun song(p: ProviderId, id: String, title: String, artist: String = "Daft Punk") = Track(p, id, title, artist)
@@ -65,11 +83,17 @@ class ArtistDirectoryTest {
         ),
     )
 
-    private fun directory(vararg catalogs: ArtistCatalog, playable: (Track) -> Boolean = { true }, now: () -> Long = { 0L }) =
+    private fun directory(
+        vararg catalogs: ArtistCatalog,
+        searchers: List<PlaylistSearch> = emptyList(),
+        playable: (Track) -> Boolean = { true },
+        now: () -> Long = { 0L },
+    ) =
         ArtistDirectory(
             catalogs = { catalogs.toList() },
             priority = { listOf(ProviderId.SPOTIFY, ProviderId.YOUTUBE_MUSIC, ProviderId.SOUNDCLOUD) },
             playable = playable,
+            playlistSearches = { searchers },
             clock = now,
         )
 
@@ -152,6 +176,58 @@ class ArtistDirectoryTest {
         // Spotify has no songs for it here (an empty answer): YouTube Music's copy opens.
         val tracks = directory(sp, yt).tracks(release)
         assertEquals(listOf("One More Time"), tracks.tracks.map { it.title })
+    }
+
+    /** A set's address as search finds it, which [PlaylistCatalog.read] opens for import. */
+    private val ghostlandLink = PlaylistLink(
+        ProviderId.SOUNDCLOUD,
+        "2317140903",
+        "https://soundcloud.com/overtonightofficial/sets/ghostland-forever",
+    )
+
+    @Test
+    fun `a service without artist pages is asked for its sets by name`() = runTest {
+        val soundcloud = FakeSearcher(
+            ProviderId.SOUNDCLOUD,
+            listOf(
+                ServicePlaylist(
+                    provider = ProviderId.SOUNDCLOUD,
+                    id = "2317140903",
+                    title = "ghostland forever",
+                    owner = "overtonight",
+                    artworkUrl = "https://i1.sndcdn.com/a-t500x500.jpg",
+                    link = ghostlandLink,
+                ),
+            ),
+        )
+        val youtube = FakeCatalog(
+            ProviderId.YOUTUBE_MUSIC, emptyList(), emptyMap(),
+            foundPlaylists = listOf(ServicePlaylist(ProviderId.YOUTUBE_MUSIC, "PL1", "Ghostland forever mix")),
+        )
+
+        val found = directory(youtube, searchers = listOf(soundcloud)).searchPlaylists("ghostland")
+
+        // The catalogue's own playlist first (YouTube Music is above SoundCloud in the order).
+        assertEquals(listOf("Ghostland forever mix", "ghostland forever"), found.map { it.title })
+        assertEquals("overtonight", found.last().owner)
+        assertEquals(ghostlandLink, found.last().link, "the set keeps the address that opens it")
+    }
+
+    @Test
+    fun `a set search that fails loses its own answer only, and is not a missing artist page`() = runTest {
+        val youtube = FakeCatalog(
+            ProviderId.YOUTUBE_MUSIC, listOf(yt),
+            mapOf("UCdp" to ArtistProfile(artist = yt, topTracks = listOf(song(ProviderId.YOUTUBE_MUSIC, "y1", "One More Time")))),
+            foundPlaylists = listOf(ServicePlaylist(ProviderId.YOUTUBE_MUSIC, "PL1", "Daft Punk mix")),
+        )
+        val broken = FakeSearcher(ProviderId.SOUNDCLOUD, emptyList(), fail = "SoundCloud did not answer")
+        val dir = directory(youtube, searchers = listOf(broken))
+
+        assertEquals(listOf("Daft Punk mix"), dir.searchPlaylists("Daft").map { it.title })
+        assertEquals(1, broken.asked, "the service was asked")
+
+        val view = dir.open("Daft Punk")
+        assertTrue(view.missing.isEmpty(), "a failed set search is not a missing artist page: ${view.missing}")
     }
 
     @Test

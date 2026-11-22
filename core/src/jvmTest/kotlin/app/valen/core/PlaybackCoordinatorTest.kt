@@ -1053,6 +1053,30 @@ class PlaybackCoordinatorTest {
         testScheduler.runCurrent()
         assertEquals(other.key, coordinator.snapshot.value?.track?.key)
     }
+
+    @Test
+    fun `search asks a service that only finds sets, like SoundCloud`() = runTest {
+        // SoundCloud has no artist pages; it finds its own sets (this is the wiring under test).
+        val soundcloud = object : MusicProvider by FakeProvider(ProviderId.SOUNDCLOUD), PlaylistSearch {
+            override val provider = ProviderId.SOUNDCLOUD
+            override suspend fun findPlaylists(query: String, limit: Int) = listOf(
+                ServicePlaylist(
+                    provider = ProviderId.SOUNDCLOUD,
+                    id = "2317140903",
+                    title = "ghostland forever",
+                    owner = "overtonight",
+                    link = PlaylistLink(ProviderId.SOUNDCLOUD, "2317140903", "https://soundcloud.com/overtonightofficial/sets/ghostland-forever"),
+                ),
+            )
+        }
+        val coordinator = PlaybackCoordinator(listOf(FakeProvider(ProviderId.YOUTUBE_MUSIC), soundcloud), backgroundScope, settings())
+
+        val found = coordinator.artists.searchPlaylists("ghostland forever")
+
+        assertEquals(listOf("ghostland forever"), found.map { it.title })
+        assertEquals(ProviderId.SOUNDCLOUD, found.single().provider)
+        assertEquals("overtonight", found.single().owner)
+    }
 }
 
 /** Takes play() but changes what it shows only when told to ([show]). */

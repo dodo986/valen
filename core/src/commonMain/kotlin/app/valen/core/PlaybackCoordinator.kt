@@ -930,7 +930,8 @@ class PlaybackCoordinator(
 
     /**
      * Artist pages from every service that has them and can be used now (Spotify once signed in,
-     * YouTube Music always), put together (see [ArtistDirectory]).
+     * YouTube Music always), put together (see [ArtistDirectory]); beside them the services that
+     * only search their own sets by name (SoundCloud), so search finds their playlists too.
      */
     val artists: ArtistDirectory = ArtistDirectory(
         catalogs = {
@@ -940,6 +941,8 @@ class PlaybackCoordinator(
         },
         priority = { priorityOrder() },
         playable = { canPlayNow(it) },
+        // A set search is public data on these services, so being signed in does not gate it.
+        playlistSearches = { providers.filterIsInstance<PlaylistSearch>() },
     )
 
     /**
