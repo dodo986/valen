@@ -193,8 +193,9 @@ object Motion {
      * soften and the ones further off recede — more blur, lower opacity — so the words on show
      * read as one plane in focus and the rest as paper behind it. A line's focus moves over
      * [LyricDepthMs] as it becomes sung or past, and settles it: it rises [LyricSettleRise] into
-     * focus. The blur is at most [LyricBlurFarDp] and is kept within [LyricBlurLines] lines of the
-     * song, so no layer is spent on words far out of sight; past that the recede is opacity alone.
+     * focus. The blur is at most [LyricBlurFarDp] and is kept within [LyricBlurLines] rows of the
+     * song, enough to cover the lyrics visible on tall stages; past that the recede is opacity
+     * alone so no layer is spent on words far out of sight.
      * Where a platform cannot blur a layer the recede is carried by opacity and tone instead
      * ([LyricDepthAlphaNoBlur], [LyricDepthTint]).
      */
@@ -203,7 +204,7 @@ object Motion {
     const val LyricDepthNearStep = 0.30f
     const val LyricDepthPastStep = 0.34f
     const val LyricDepthFloor = 0.22f
-    const val LyricBlurLines = 5
+    const val LyricBlurLines = 12
     val LyricBlurFarDp = 6.5.dp
     const val LyricDepthAlphaNear = 0.62f
     const val LyricDepthAlphaNoBlur = 0.54f
