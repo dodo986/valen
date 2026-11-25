@@ -127,7 +127,13 @@ class PlaylistStore(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
 
     fun load(): List<Playlist> = runCatching {
-        read()?.let { json.decodeFromString<PlaylistFile>(it).playlists } ?: emptyList()
+        read()?.let { json.decodeFromString<PlaylistFile>(it).playlists }?.map { p ->
+            p.copy(
+                artworkUrl = largestArtworkUrl(p.artworkUrl),
+                tracks = p.tracks.map(Track::withLargestArtwork),
+                added = p.added.map(Track::withLargestArtwork),
+            )
+        } ?: emptyList()
     }.getOrDefault(emptyList())
 
     fun save(playlists: List<Playlist>) {

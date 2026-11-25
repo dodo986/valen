@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.providers.ytmusic
 
+import app.myspoti.api.Image
 import app.myspoti.api.Track as CatalogTrack
-import app.myspoti.api.best
 import app.myspoti.web.PageBridge
 import app.myspoti.web.PageHost
 import app.myspoti.web.PageState
@@ -22,6 +22,7 @@ import app.valen.core.EffectSupport
 import app.valen.core.ProviderSignIn
 import app.valen.core.SessionState
 import app.valen.core.Track
+import app.valen.core.largestArtworkUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -306,13 +307,17 @@ class YtmusicProvider(
     private fun CatalogTrack.toCore(): Track? {
         val videoId = uri.substringAfterLast(':').takeIf { Ytm.isVideoId(it) }
             ?: return null
+        val picked = (album?.images?.takeIf { it.isNotEmpty() } ?: images).fold<Image, Image?>(null) { best, img ->
+            if (best == null || (img.width ?: 0) >= (best.width ?: 0)) img else best
+        }
+        val artwork = largestArtworkUrl(picked?.url) ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
         return Track(
             provider = ProviderId.YOUTUBE_MUSIC,
             id = videoId,
             title = name,
             artist = artists.joinToString(", ") { it.name }.ifBlank { "YouTube Music" },
             album = album?.name?.takeIf { it.isNotBlank() },
-            artworkUrl = album?.images?.best(300)?.url ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+            artworkUrl = artwork,
             durationMs = durationMs,
             explicit = explicit,
             uri = "${Ytm.PROVIDER}:track:$videoId",

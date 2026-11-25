@@ -116,7 +116,14 @@ class ListeningStore(
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
 
-    fun load(): ListeningLog = runCatching { read()?.let { json.decodeFromString<ListeningLog>(it) } }.getOrNull() ?: ListeningLog()
+    fun load(): ListeningLog = runCatching {
+        read()?.let { json.decodeFromString<ListeningLog>(it) }?.let { log ->
+            log.copy(songs = log.songs.mapValues { (_, s) ->
+                val upgraded = largestArtworkUrl(s.artworkUrl)
+                if (upgraded == s.artworkUrl) s else s.copy(artworkUrl = upgraded)
+            })
+        }
+    }.getOrNull() ?: ListeningLog()
 
     fun save(log: ListeningLog) {
         runCatching { write(json.encodeToString(log)) }
@@ -203,7 +210,17 @@ class ListeningStats(
             first = now,
         )).let {
             // What it takes to play the song again, filled in for songs counted before it was kept.
+            val nextArt = largestArtworkUrl(track.artworkUrl)
+            val prevArt = largestArtworkUrl(it.artworkUrl)
+            val bestArt = when {
+                nextArt == null -> prevArt
+                prevArt == null -> nextArt
+                "ytimg.com" in prevArt && "ytimg.com" !in nextArt -> nextArt
+                "googleusercontent.com" in nextArt || "ggpht.com" in nextArt -> nextArt
+                else -> prevArt
+            }
             it.copy(
+                artworkUrl = bestArt,
                 durationMs = track.durationMs.takeIf { d -> d > 0 } ?: it.durationMs,
                 uri = it.uri ?: track.uri,
                 link = it.link ?: track.link,

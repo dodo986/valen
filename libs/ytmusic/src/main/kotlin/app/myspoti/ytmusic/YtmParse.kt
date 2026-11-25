@@ -146,7 +146,7 @@ object YtmParse {
             }
             val greyed = r.s("musicItemRendererDisplayPolicy") == "MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT"
             return Item.Song(Track(uri("track", videoId), title, length, artists, albumIn(rest, imgs), explicit(r), playable = !greyed,
-                uid = r.o("playlistItemData")?.s("playlistSetVideoId")))
+                uid = r.o("playlistItemData")?.s("playlistSetVideoId"), images = imgs))
         }
         val (id, type) = browse ?: return null
         return card(title, id, type, rest, imgs)
@@ -163,7 +163,7 @@ object YtmParse {
             val watch = watchOf(c) ?: return null
             val videoId = watch.s("videoId") ?: return null
             if (videoType(watch) == EPISODE) return null
-            return Item.Song(Track(uri("track", videoId), title, 0, artistsIn(sub), albumIn(sub, imgs), explicit(c)))
+            return Item.Song(Track(uri("track", videoId), title, 0, artistsIn(sub), albumIn(sub, imgs), explicit(c), images = imgs))
         }
         return card(title, id, type, sub, imgs)
     }
@@ -223,7 +223,7 @@ object YtmParse {
         val imgs = images(c.o("thumbnail"))
         val browse = browseOf(t)
         return if (browse != null) card(title, browse.first, browse.second, sub, imgs)
-        else watchOf(t)?.s("videoId")?.let { Item.Song(Track(uri("track", it), title, sub.mapNotNull { r -> r.s("text") }.firstNotNullOfOrNull(::lengthMs) ?: 0, artistsIn(sub), albumIn(sub, imgs))) }
+        else watchOf(t)?.s("videoId")?.let { Item.Song(Track(uri("track", it), title, sub.mapNotNull { r -> r.s("text") }.firstNotNullOfOrNull(::lengthMs) ?: 0, artistsIn(sub), albumIn(sub, imgs), images = imgs)) }
     }
 
     /** The top result cards of a search, as items. */
@@ -296,7 +296,7 @@ object YtmParse {
         val artists = h?.artists.orEmpty()
         val songs = rows(answer).filterIsInstance<Item.Song>().map { s ->
             val t = s.track
-            t.copy(album = t.album ?: ref, artists = t.artists.filter { it.uri.isNotEmpty() }.ifEmpty { artists.ifEmpty { t.artists } })
+            t.copy(album = t.album ?: ref, images = t.images.ifEmpty { images }, artists = t.artists.filter { it.uri.isNotEmpty() }.ifEmpty { artists.ifEmpty { t.artists } })
         }
         val words = h?.subtitle.orEmpty()
         val album = Album(
@@ -372,7 +372,7 @@ object YtmParse {
         return Track(
             uri("track", videoId), text(r.o("title")).orEmpty(), lengthMs(text(r.o("lengthText"))) ?: 0L,
             artistsIn(byline).ifEmpty { byline.firstOrNull()?.s("text")?.let { listOf(ArtistRef("", it)) }.orEmpty() },
-            albumIn(byline, imgs), explicit(r),
+            albumIn(byline, imgs), explicit(r), images = imgs,
         )
     }
 }

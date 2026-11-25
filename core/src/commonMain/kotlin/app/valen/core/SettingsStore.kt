@@ -14,7 +14,17 @@ class SettingsStore(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
 
     fun load(): AppSettings = runCatching {
-        read()?.let { json.decodeFromString<AppSettings>(it) } ?: AppSettings()
+        read()?.let { json.decodeFromString<AppSettings>(it) }?.let { s ->
+            s.copy(
+                favouriteSongs = s.favouriteSongs.map(Track::withLargestArtwork),
+                session = s.session?.let { saved ->
+                    saved.copy(
+                        queue = saved.queue.map(Track::withLargestArtwork),
+                        unshuffled = saved.unshuffled?.map(Track::withLargestArtwork),
+                    )
+                },
+            )
+        } ?: AppSettings()
     }.getOrDefault(AppSettings())
 
     fun save(settings: AppSettings) {

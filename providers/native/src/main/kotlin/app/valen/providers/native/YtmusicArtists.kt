@@ -70,13 +70,9 @@ internal class YtmusicArtists(
     }
 }
 
-/** The largest picture, as wide as YouTube serves it (its thumbnails take a size in the address). */
-private fun List<Image>.largest(): String? = maxByOrNull { it.width ?: 0 }?.url
-    ?.replace(Regex("""=w\d+-h\d+"""), "=w720-h720")
-
 private fun CatalogArtist.toService(): ServiceArtist? {
     val id = uri.substringAfterLast(':').takeIf { it.isNotBlank() && uri.contains(":artist:") } ?: return null
-    return ServiceArtist(ProviderId.YOUTUBE_MUSIC, id, name, images.largest())
+    return ServiceArtist(ProviderId.YOUTUBE_MUSIC, id, name, images.largestYoutubeArtwork())
 }
 
 private fun CatalogAlbum.toRelease(fallbackArtist: String): Release? {
@@ -88,7 +84,7 @@ private fun CatalogAlbum.toRelease(fallbackArtist: String): Release? {
         artist = artists.joinToString(", ") { it.name }.ifBlank { fallbackArtist },
         kind = ReleaseKind.of(type),
         year = releaseDate?.take(4)?.toIntOrNull(),
-        artworkUrl = images.largest(),
+        artworkUrl = images.largestYoutubeArtwork(),
     )
 }
 
@@ -99,7 +95,7 @@ private fun CatalogPlaylist.toService(): ServicePlaylist? {
         id = id,
         title = name,
         owner = owner,
-        artworkUrl = images.largest(),
+        artworkUrl = images.largestYoutubeArtwork(),
         link = PlaylistLink(ProviderId.YOUTUBE_MUSIC, id, "https://music.youtube.com/playlist?list=$id"),
     )
 }

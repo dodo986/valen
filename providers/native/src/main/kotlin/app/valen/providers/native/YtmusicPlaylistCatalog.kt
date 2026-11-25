@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.providers.native
 
+import app.myspoti.api.Image
 import app.myspoti.api.Track as CatalogTrack
-import app.myspoti.api.best
 import app.myspoti.ytmusic.InnerTube
 import app.myspoti.ytmusic.Ytm
 import app.myspoti.ytmusic.YtmParse
@@ -12,22 +12,40 @@ import app.valen.core.PlaylistRef
 import app.valen.core.ProviderId
 import app.valen.core.ReadPlaylist
 import app.valen.core.Track
+import app.valen.core.largestArtworkUrl
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
+/** The largest picture, upgraded when YouTube serves a small size token in the address. */
+internal fun List<Image>.largestYoutubeArtwork(): String? {
+    val picked = fold<Image, Image?>(null) { best, img ->
+        if (best == null || (img.width ?: 0) >= (best.width ?: 0)) img else best
+    } ?: return null
+    val url = picked.url
+    val host = url.substringAfter("://", "").substringBefore('/').substringBefore('?').lowercase()
+    if (host.endsWith("ytimg.com") && "/vi/" in url && (picked.width ?: 0) in 1 until 300) {
+        val path = url.substringBefore('?')
+        if (path.endsWith("/default.jpg")) return path.removeSuffix("/default.jpg") + "/hqdefault.jpg"
+        if ("?sqp=" in url) return path
+    }
+    return largestArtworkUrl(url)
+}
+
 /** One of the web app's songs as Valen's track, with the YouTube Music cover as its artwork. */
 internal fun CatalogTrack.toValenTrack(): Track? {
     val videoId = uri.substringAfterLast(':').takeIf { Ytm.isVideoId(it) } ?: return null
+    val artwork = (album?.images?.takeIf { it.isNotEmpty() } ?: images).largestYoutubeArtwork()
+        ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
     return Track(
         provider = ProviderId.YOUTUBE_MUSIC,
         id = videoId,
         title = name,
         artist = artists.joinToString(", ") { it.name }.ifBlank { "YouTube Music" },
         album = album?.name?.takeIf { it.isNotBlank() },
-        artworkUrl = album?.images?.best(300)?.url ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+        artworkUrl = artwork,
         durationMs = durationMs,
         explicit = explicit,
         uri = "${Ytm.PROVIDER}:track:$videoId",
@@ -115,7 +133,7 @@ class YtmusicPlaylistCatalog(
         return ReadPlaylist(
             name = name,
             tracks = mapped,
-            artworkUrl = header?.images?.best(300)?.url,
+            artworkUrl = header?.images?.largestYoutubeArtwork(),
             note = if (truncated) "Only the first ${mapped.size} songs of this playlist were read" else null,
             link = PlaylistLink(provider, id, "https://music.youtube.com/playlist?list=$id"),
             blocked = blocked,
@@ -161,7 +179,7 @@ class YtmusicPlaylistCatalog(
         return PlaylistRef(
             name = name,
             trackCount = trackCount,
-            artworkUrl = images.best(300)?.url,
+            artworkUrl = images.largestYoutubeArtwork(),
             owner = owner,
             link = PlaylistLink(provider, id, "https://music.youtube.com/playlist?list=$id"),
         )

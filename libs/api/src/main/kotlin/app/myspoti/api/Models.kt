@@ -28,6 +28,8 @@ data class Track(
     val addedAt: String? = null,
     /** The catalogue knows a music video of it, when the answer says. */
     val hasVideo: Boolean = false,
+    /** The row's own thumbnails, kept even when the track has no linked album. */
+    val images: List<Image> = emptyList(),
 )
 
 data class Album(

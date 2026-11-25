@@ -7,6 +7,7 @@ import app.valen.core.Playlist
 import app.valen.core.PlaylistDownload
 import app.valen.core.ProviderId
 import app.valen.core.Track
+import app.valen.core.largestArtworkUrl
 import app.valen.core.DownloadableServices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -588,7 +589,7 @@ class DiskShelf(
         fun largest(url: String): String? {
             if (!url.startsWith("https://") && !url.startsWith("http://")) return null
             return when {
-                "googleusercontent.com" in url || "ggpht.com" in url -> url.replace(Regex("=w\\d+-h\\d+[^/]*$"), "=w1200-h1200-l90-rj")
+                "googleusercontent.com" in url || "ggpht.com" in url -> largestArtworkUrl(url)
                 "sndcdn.com" in url -> url.replace(Regex("-(large|t\\d+x\\d+|small|badge|tiny|mini|crop)\\."), "-t500x500.")
                 else -> url
             }

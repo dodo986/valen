@@ -58,6 +58,57 @@ fun Track.webLink(): String? = link?.takeIf { it.startsWith("https://") } ?: whe
     ProviderId.LOCAL -> null
 }
 
+private const val GOOGLE_ARTWORK_PX = 1200
+private val GOOGLE_WH = Regex("""=w(\d+)-h(\d+)(?=-|$|\?)""")
+private val GOOGLE_S = Regex("""=s(\d+)(?=-|$|\?)""")
+
+/**
+ * Upgrades Google/YouTube thumbnail addresses (`googleusercontent.com`, `ggpht.com`, `ytimg.com`)
+ * to a crisp display size without shrinking images that are already larger or distorting non-square
+ * banners.
+ */
+fun largestArtworkUrl(url: String?): String? {
+    if (url.isNullOrBlank()) return url
+    val host = url.substringAfter("://", "").substringBefore('/').substringBefore('?').lowercase()
+    return when {
+        host.endsWith("googleusercontent.com") || host.endsWith("ggpht.com") -> {
+            val queryIdx = url.indexOf('?')
+            val path = if (queryIdx >= 0) url.substring(0, queryIdx) else url
+            val query = if (queryIdx >= 0) url.substring(queryIdx) else ""
+            val upgraded = GOOGLE_WH.replace(path) { m ->
+                val w = m.groupValues[1].toIntOrNull() ?: 0
+                val h = m.groupValues[2].toIntOrNull() ?: 0
+                when {
+                    w > 0 && h > 0 && maxOf(w, h) >= GOOGLE_ARTWORK_PX -> m.value
+                    w > 0 && h > 0 && w != h -> {
+                        val nw = if (w > h) GOOGLE_ARTWORK_PX else kotlin.math.round(w.toDouble() * GOOGLE_ARTWORK_PX / h).toInt().coerceAtLeast(1)
+                        val nh = if (h > w) GOOGLE_ARTWORK_PX else kotlin.math.round(h.toDouble() * GOOGLE_ARTWORK_PX / w).toInt().coerceAtLeast(1)
+                        "=w$nw-h$nh"
+                    }
+                    else -> "=w$GOOGLE_ARTWORK_PX-h$GOOGLE_ARTWORK_PX"
+                }
+            }.let { p ->
+                if (p != path) p else GOOGLE_S.replace(p) { m ->
+                    val s = m.groupValues[1].toIntOrNull() ?: 0
+                    if (s >= GOOGLE_ARTWORK_PX) m.value else "=s$GOOGLE_ARTWORK_PX"
+                }
+            }
+            upgraded + query
+        }
+        host.endsWith("ytimg.com") && "/vi/" in url -> {
+            val path = url.substringBefore('?')
+            if (path.endsWith("/default.jpg")) path.removeSuffix("/default.jpg") + "/hqdefault.jpg"
+            else url
+        }
+        else -> url
+    }
+}
+
+internal fun Track.withLargestArtwork(): Track {
+    val upgraded = largestArtworkUrl(artworkUrl)
+    return if (upgraded == artworkUrl) this else copy(artworkUrl = upgraded)
+}
+
 sealed interface SessionState {
     data object SignedOut : SessionState
     data object Connecting : SessionState
