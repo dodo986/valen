@@ -709,13 +709,21 @@ private const val MaxLogBytes = 4L * 1024 * 1024
 internal fun guarded(command: List<String>): List<String> {
     if (!Files.isExecutable(java.nio.file.Paths.get("/bin/sh"))) return command
     val script = """
-        "${'$'}@" &
+        exec 3<&0
+        "${'$'}@" </dev/null 3<&- &
         child=${'$'}!
-        trap 'kill -TERM ${'$'}child 2>/dev/null; exit 0' TERM INT HUP
-        ( while kill -0 ${'$'}child 2>/dev/null; do sleep 2; done; kill -TERM ${'$'}${'$'} 2>/dev/null ) &
-        read _ignored
-        kill -TERM ${'$'}child 2>/dev/null
-        wait ${'$'}child
+        (
+            while IFS= read -r _ignored <&3; do :; done
+            kill -TERM "${'$'}child" 2>/dev/null
+        ) &
+        watcher=${'$'}!
+        exec 3<&-
+        trap 'trap "" TERM INT HUP; kill -TERM "${'$'}child" "${'$'}watcher" 2>/dev/null; wait "${'$'}watcher" 2>/dev/null; exit 0' TERM INT HUP
+        wait "${'$'}child" 2>/dev/null
+        rc=${'$'}?
+        kill -TERM "${'$'}watcher" 2>/dev/null
+        wait "${'$'}watcher" 2>/dev/null
+        exit "${'$'}rc"
     """.trimIndent()
     return listOf("/bin/sh", "-c", script, "valen-browser") + command
 }
