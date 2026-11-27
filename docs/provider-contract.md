@@ -42,11 +42,13 @@ Rules:
   background (a service's own volume answer can take 30 s on an idle page).
 - Adapter constructors take their transport plus a `ProviderSignIn`; no Android/desktop types.
 - `connect()` delegates to `ProviderSignIn.connect()`; it must not ask for credentials itself.
-- On desktop, a closed Chrome page is a transport failure, not evidence of sign-out. Account
-  probes recover the private browser headlessly and read browser-wide cookies (including parent
-  domains), without loading YouTube Music or SoundCloud pages. A replaced browser or closed
-  Spotify tab invalidates its adapter generation. Three unsuccessful browser starts stop automatic
-  recovery until Connect/Retry; shutdown prevents further starts. Cookie deletion and account
+- On desktop, Spotify plays through a headless private Chrome (`ChromeLauncher`, bundled or
+  system) while all three services sign in via the user's real external browser (`xdg-open` +
+  `BrowserCookieReader` / `cookies.txt` / paste into `DesktopSessionStore`), avoiding embedded
+  in-app login blocks. YouTube Music and SoundCloud never start or require Chromium for sign-in,
+  session reads, or playback. A closed Spotify Chrome page is a transport failure, not evidence of
+  sign-out; a replaced browser invalidates its adapter generation, and `DesktopHosts.spotify()`
+  re-injects the stored `sp_dc` cookie via CDP when the tab attaches. Cookie deletion and account
   probes are serialised, and failed deletion must not be reported as a successful disconnect.
 - Every copied Orpheon file keeps its SPDX header and package name.
 - **Sound effects.** `setEffects` gets `SoundEffects.effective()` (flat while the person has them

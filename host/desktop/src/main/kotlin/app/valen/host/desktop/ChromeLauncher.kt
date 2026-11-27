@@ -139,6 +139,7 @@ class ChromeLauncher(
         val log = profileDir.resolve("chrome.log")
         // The log is appended to by every launch; past a few megabytes it is started afresh.
         runCatching { if (Files.size(log) > MaxLogBytes) Files.delete(log) }
+        val logOffset = runCatching { if (Files.exists(log)) Files.size(log) else 0L }.getOrDefault(0L)
         val command = buildList {
             add(exe.toString())
             if (wantHeadless) {
@@ -154,6 +155,11 @@ class ChromeLauncher(
             add("--remote-debugging-address=127.0.0.1")
             add("--no-first-run")
             add("--no-default-browser-check")
+            add("--disable-default-apps")
+            add("--disable-background-networking")
+            // Keep the bundled playback engine out of desktop MPRIS / media-key ownership; Valen's
+            // own MprisService owns media integration.
+            add("--disable-features=HardwareMediaKeyHandling,MediaSessionService")
             add("--autoplay-policy=no-user-gesture-required")
             add("--disable-background-timer-throttling")
             add("--disable-renderer-backgrounding")
@@ -164,21 +170,27 @@ class ChromeLauncher(
         launchCount++
         process = runCatching {
             ProcessBuilder(guarded(command))
+                .also { it.environment().remove("LD_PRELOAD") }
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()))
                 .redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()))
                 .start()
         }.onFailure { lastError = "Could not start Chrome: ${it.message}" }.getOrNull() ?: return false
         val ok = awaitReady()
-        if (!ok && process?.isAlive == true) {
-            // A Chrome that refused to run its sandbox (some distros restrict user namespaces)
-            // says so in the log: one retry without it is better than no player at all.
-            val saidSandbox = runCatching { Files.readString(log) }.getOrDefault("")
-                .contains("sandbox", ignoreCase = true)
+        if (!ok) {
+            // A Chrome that refused to run its sandbox (AppImage FUSE mounts or distros that
+            // restrict user namespaces) exits at once and says so in the log: retry without it.
+            val newLog = runCatching {
+                val all = Files.readAllBytes(log)
+                val start = logOffset.toInt().coerceIn(0, all.size)
+                String(all, start, all.size - start)
+            }.getOrDefault("")
+            val saidSandbox = newLog.contains("sandbox", ignoreCase = true)
             if (saidSandbox) {
                 process?.destroy()
                 runCatching { process?.waitFor() }
                 process = runCatching {
                     ProcessBuilder(guarded(command + "--no-sandbox"))
+                        .also { it.environment().remove("LD_PRELOAD") }
                         .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()))
                         .redirectError(ProcessBuilder.Redirect.appendTo(log.toFile()))
                         .start()
@@ -188,7 +200,9 @@ class ChromeLauncher(
                     return true
                 }
             }
-            lastError = "Chrome did not open $cdpUrl within ${readyTimeoutMs / 1000}s: see $log"
+            if (lastError == null) {
+                lastError = "Chrome did not open $cdpUrl within ${readyTimeoutMs / 1000}s: see $log"
+            }
         }
         if (ok) lastError = null
         return ok
@@ -476,17 +490,55 @@ class ChromeLauncher(
         }
 
         /**
-         * `$VALEN_CHROME_BIN`, then the project's `.tools/chrome/opt/google/chrome/chrome` (walking
-         * up from the working directory), then any Chromium-family browser this machine has.
+         * `$VALEN_CHROME_BIN`, then the Chrome runtime bundled inside the packaged app
+         * (`$VALEN_BUNDLED_CHROME` or beside `java.home`), then the project's
+         * `.tools/chrome/opt/google/chrome/chrome`, then any Chromium-family browser this machine has.
          */
         fun findBinary(): Path? {
             System.getenv("VALEN_CHROME_BIN")?.takeIf { it.isNotBlank() }?.let {
                 val p = Paths.get(it)
                 if (Files.isExecutable(p)) return p
             }
+            bundledBinary()?.let { return it }
             val local = projectRoot()?.resolve(".tools/chrome/opt/google/chrome/chrome")
             if (local != null && Files.isExecutable(local)) return local
             return systemBinary()
+        }
+
+        /**
+         * A private Chrome runtime packaged alongside Valen (AppImage `chrome/chrome` or `.deb`
+         * `/opt/valen/lib/chrome/chrome`). Used exclusively as Valen's headless playback engine.
+         */
+        fun bundledBinary(): Path? {
+            System.getenv("VALEN_BUNDLED_CHROME")?.takeIf { it.isNotBlank() }?.let {
+                val p = Paths.get(it)
+                if (Files.isExecutable(p)) return p
+            }
+            val anchors = buildList {
+                System.getProperty("java.home")?.takeIf { it.isNotBlank() }?.let { add(Paths.get(it)) }
+                runCatching {
+                    ProcessHandle.current().info().command().orElse(null)?.let { Paths.get(it).parent }
+                }.getOrNull()?.let { add(it) }
+                runCatching {
+                    ChromeLauncher::class.java.protectionDomain?.codeSource?.location?.toURI()?.let { Paths.get(it).parent }
+                }.getOrNull()?.let { add(it) }
+            }
+            val relativePaths = listOf(
+                "chrome/chrome",
+                "../chrome/chrome",
+                "../../chrome/chrome",
+                "../lib/chrome/chrome",
+                "../../lib/chrome/chrome",
+            )
+            for (anchor in anchors) {
+                for (rel in relativePaths) {
+                    val candidate = runCatching { anchor.resolve(rel).normalize() }.getOrNull() ?: continue
+                    if (Files.isExecutable(candidate)) return candidate
+                }
+            }
+            val deb = Paths.get("/opt/valen/lib/chrome/chrome")
+            if (Files.isExecutable(deb)) return deb
+            return null
         }
 
         /**

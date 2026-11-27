@@ -473,20 +473,21 @@ Key invariants:
   sets are listed under `/users/{id}/playlists` (`/me` gives the id; `/me/playlists` answers 404 to
   these tokens now), and neither a refused nor a missing session blocks importing a public set: the
   read is retried without it.
-- **Spotify signs in inside Valen's private Chrome.** A sign-in is the only reason a window may
-  appear (`connect()` → `DesktopHosts.ensureVisible()`), and replacing the browser bumps
-  `DesktopHosts.generation`, which invalidates the attached adapter. Spotify is therefore always
-  built behind `RetryingProvider` (`app-desktop` `buildProviders`): the next use after a
-  replacement builds a fresh adapter on the new page, while the sign-in's own poller keeps the
-  account on show. An adapter that is kept across a replacement talks to a page that no longer
-  exists and every bridge call times out — that is what "Spotify does not play after signing in"
-  looks like.
+- **Desktop sign-in uses the user's real browser; bundled Chrome is Spotify's headless playback
+  engine only.** `ExternalSignIn` + `BrowserCookieReader` + `DesktopSessionStore`
+  (`$XDG_DATA_HOME/valen/sessions.json`, `0600`) handle sign-in via `xdg-open`, Firefox/Chromium
+  cookie import, `cookies.txt`, or pasted cookie strings, shown in `ui/signin/SignInSheet.kt`.
+  YouTube Music and SoundCloud never require Chromium for sign-in or playback, and refreshed
+  SoundCloud tokens persist in `DesktopSessionStore`. `DesktopHosts.spotify()` injects stored
+  `sp_dc` via `CdpHost.setCookies(..., httpOnly = true)`. Chrome runs headless with
+  `--disable-features=HardwareMediaKeyHandling,MediaSessionService` so it never creates a
+  duplicate MPRIS entry or launcher shortcut, and `ChromeLauncher.bundledBinary()` checks
+  `$VALEN_BUNDLED_CHROME` / package-relative `chrome/chrome` ahead of `.tools/chrome` and
+  system browsers.
 - **A sign-in state is the service's session cookie, not its page's markup.** Spotify is connected
-  when the browser holds `sp_dc`, YouTube Music when it holds `SAPISID`/`__Secure-3PAPISID`,
-  SoundCloud when it holds `oauth_token`. Reading the page instead ("no login button") reported the
-  "Unsupported browser" page as signed in, and the Web Player's own tab can be left on the sign-in
-  screen after a login that finished elsewhere (`SpotifySignIn` reloads it once on the transition).
-  Disconnect deletes those cookies; a sign-out that could not is reported, never claimed.
+  when `DesktopSessionStore` (or Chrome) holds `sp_dc`, YouTube Music when `DesktopSessionStore`
+  holds cookies with `SAPISID`/`__Secure-3PAPISID`, SoundCloud when `DesktopSessionStore` holds
+  `oauth_token`. Disconnect clears `DesktopSessionStore` and any Chrome cookies if running.
 - **One browser launch or replacement at a time.** `ChromeLauncher.start`/`stopBrowser` take the
   same mutex (a play reaching for the browser during a sign-in's replacement used to launch a second
   Chrome on the profile, which handed off and exited), and `starting` is true while a browser comes

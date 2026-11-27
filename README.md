@@ -18,7 +18,7 @@ Check out the [Roadmap (TODO.md)](TODO.md) to see what's coming next.
 
 The queue belongs to Valen. Spotify, YouTube Music, and SoundCloud sit behind a single interface, so the UI doesn't care which backend is active and no service gets to hijack your queue. Each service plays one track at a time, in the exact order you lined them up.
 
-Playback runs through each service's **own official player** (Spotify Web Player in a hidden Chrome instance on desktop, the YouTube Music web app, and SoundCloud's streams). No DRM is bypassed, Valen never asks for your passwords, and it doesn't store auth tokens. You log in directly on each service's page inside Valen's isolated browser profile; disconnecting wipes those cookies. Your playlists, likes, and queue stay local to Valen—nothing gets written back to your accounts.
+Playback runs through each service's **own official player** (Spotify Web Player in a headless bundled Chrome instance on desktop, the YouTube Music web app, and SoundCloud's streams). No DRM is bypassed, Valen never asks for your passwords, and it doesn't store credentials. On Linux desktop, signing in opens the service's login page in your normal default browser and imports the session cookies (`sp_dc`, YouTube Music cookies, or SoundCloud `oauth_token`) into a private local store (`0600`). Your playlists, likes, and queue stay local to Valen—nothing gets written back to your accounts.
 
 <details>
 <summary><b>how does it work??</b></summary>

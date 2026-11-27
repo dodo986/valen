@@ -116,6 +116,24 @@ sealed interface SessionState {
     data class Unavailable(val reason: String) : SessionState
 }
 
+/**
+ * An external-browser sign-in prompt shown while [ProviderSignIn.connect] waits for cookies from
+ * the user's real browser or an imported/pasted fallback.
+ */
+data class SignInPrompt(
+    val provider: ProviderId,
+    val loginUrl: String,
+    val status: String,
+    val hasBrowserProfile: Boolean,
+    val cookieHint: String,
+    val error: String? = null,
+    val onOpenBrowser: () -> Unit,
+    val onCheckNow: () -> Unit,
+    val onImportFile: (String) -> Unit,
+    val onPasteCookie: (String) -> Unit,
+    val onCancel: () -> Unit,
+)
+
 data class PlayerSnapshot(
     val track: Track? = null,
     val isPlaying: Boolean = false,

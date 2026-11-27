@@ -258,4 +258,72 @@ class ChromeLauncherTest {
             dir.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `bundledBinary finds Chrome relative to java home when present`() {
+        val dir = Files.createTempDirectory("valen-bundled-chrome")
+        val oldHome = System.getProperty("java.home")
+        try {
+            val runtime = dir.resolve("lib/runtime")
+            val chrome = dir.resolve("chrome/chrome")
+            Files.createDirectories(runtime)
+            Files.createDirectories(chrome.parent)
+            Files.writeString(chrome, "#!/bin/sh\necho 'Google Chrome 157.0.8103.78'\n")
+            assertTrue(chrome.toFile().setExecutable(true))
+
+            if (System.getenv("VALEN_BUNDLED_CHROME").isNullOrBlank()) {
+                System.setProperty("java.home", runtime.toString())
+                assertEquals(chrome.normalize(), ChromeLauncher.bundledBinary()?.normalize())
+            }
+        } finally {
+            if (oldHome != null) System.setProperty("java.home", oldHome)
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `retries with no-sandbox even when Chrome exited immediately on sandbox failure`() = runBlocking {
+        val dir = Files.createTempDirectory("valen-sandbox-retry")
+        try {
+            val exe = dir.resolve("chrome")
+            val profile = dir.resolve("profile")
+            val port = 39341
+            val python = BrowserCookieReader.findOnPath("python3", System.getenv("PATH").orEmpty())
+                ?: return@runBlocking
+            // Fake browser: prints "--version" as Chromium, fails immediately with "sandbox" unless
+            // --no-sandbox is passed, then serves /json/version on the DevTools port.
+            Files.writeString(
+                exe,
+                """
+                #!/bin/sh
+                if [ "${'$'}1" = "--version" ]; then
+                  echo "Google Chrome 157.0.8103.78"
+                  exit 0
+                fi
+                for a in "${'$'}@"; do
+                  if [ "${'$'}a" = "--no-sandbox" ]; then
+                    exec $python -c "import http.server, socketserver, sys
+                class H(http.server.BaseHTTPRequestHandler):
+                    def do_GET(self):
+                        self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+                    def log_message(self, *a): pass
+                socketserver.TCPServer(('127.0.0.1', $port), H).serve_forever()"
+                  fi
+                done
+                echo "FATAL:sandbox/linux/services/credentials.cc: Check failed" >&2
+                exit 1
+                """.trimIndent() + "\n",
+            )
+            assertTrue(exe.toFile().setExecutable(true))
+
+            val launcher = ChromeLauncher(port = port, profile = profile, binary = exe, readyTimeoutMs = 5_000)
+            try {
+                assertTrue(launcher.start(visible = false), "expected --no-sandbox retry to succeed: ${launcher.lastError}")
+            } finally {
+                launcher.close()
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
 }

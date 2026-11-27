@@ -78,6 +78,8 @@ class PlaybackCoordinator(
     val version: String = "dev",
     /** New releases from GitHub, and installing them; null where there are none (tests). */
     val updates: Updates? = null,
+    /** External-browser sign-in prompt shown on the desktop while connecting; none on Android/tests. */
+    val signInPrompt: StateFlow<SignInPrompt?> = MutableStateFlow(null),
 ) {
     /** The playlist the current queue was started from, for the stats; null for anything else. */
     private var playingFrom: String? = null

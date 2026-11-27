@@ -342,6 +342,31 @@ object Capture {
             false
         }
 
+    /** VALEN_CAPTURE_SIGNIN=spotify|ytmusic|soundcloud opens the external sign-in sheet for capture. */
+    fun signInPrompt(): kotlinx.coroutines.flow.StateFlow<app.valen.core.SignInPrompt?>? {
+        val raw = System.getenv("VALEN_CAPTURE_SIGNIN")?.lowercase() ?: return null
+        val provider = when (raw) {
+            "spotify" -> app.valen.core.ProviderId.SPOTIFY
+            "ytmusic", "youtube" -> app.valen.core.ProviderId.YOUTUBE_MUSIC
+            "soundcloud" -> app.valen.core.ProviderId.SOUNDCLOUD
+            else -> return null
+        }
+        return kotlinx.coroutines.flow.MutableStateFlow(
+            app.valen.core.SignInPrompt(
+                provider = provider,
+                loginUrl = "https://open.spotify.com/",
+                status = "Finish signing in in your browser. Valen is checking your session…",
+                hasBrowserProfile = true,
+                cookieHint = if (provider == app.valen.core.ProviderId.SPOTIFY) "sp_dc" else "session cookie",
+                onOpenBrowser = {},
+                onCheckNow = {},
+                onImportFile = {},
+                onPasteCookie = {},
+                onCancel = {},
+            ),
+        )
+    }
+
     /** How long the scene keeps drawing so real network answers can reach a frame. */
     private const val SETTLE_MS = 5_000L
     private const val STEP_MS = 80L

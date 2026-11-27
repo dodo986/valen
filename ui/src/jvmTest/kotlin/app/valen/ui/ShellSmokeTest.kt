@@ -147,6 +147,7 @@ class ShellSmokeTest {
         offline: app.valen.core.OfflineShelf? = null,
         presence: app.valen.core.PresenceLink? = null,
         updates: app.valen.core.Updates? = null,
+        signInPrompt: MutableStateFlow<app.valen.core.SignInPrompt?> = MutableStateFlow(null),
     ) = PlaybackCoordinator(
         providers = ProviderId.services.map { FakeProvider(it) },
         scope = scope,
@@ -157,6 +158,7 @@ class ShellSmokeTest {
         presence = presence,
         version = "1.0.0-alpha.4",
         updates = updates,
+        signInPrompt = signInPrompt,
     )
 
     /**
@@ -208,13 +210,14 @@ class ShellSmokeTest {
         offline: app.valen.core.OfflineShelf? = null,
         presence: app.valen.core.PresenceLink? = null,
         updates: app.valen.core.Updates? = null,
+        signInPrompt: MutableStateFlow<app.valen.core.SignInPrompt?> = MutableStateFlow(null),
         block: SkikoComposeUiTest.(PlaybackCoordinator, PlaylistManager) -> Unit,
     ) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {
             runSkikoComposeUiTest(size = Size(width.toFloat(), height.toFloat())) {
                 mainClock.autoAdvance = false
-                val coordinator = coordinator(scope, lyrics, offline, presence, updates)
+                val coordinator = coordinator(scope, lyrics, offline, presence, updates, signInPrompt)
                 block(coordinator, playlists(coordinator))
             }
         } finally {
@@ -1343,6 +1346,70 @@ class ShellSmokeTest {
             onNodeWithContentDescription("Close sound").performClick()
             settle()
             onNodeWithText("Presets").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun `external sign-in sheet opens, accepts pasted cookies, and cancels cleanly`() {
+        for ((width, height) in listOf(1600 to 900, 390 to 844)) {
+            val promptFlow = MutableStateFlow<app.valen.core.SignInPrompt?>(null)
+            var pastedToken: String? = null
+            var cancelled = false
+            inApp(width, height, signInPrompt = promptFlow) { coordinator, playlists ->
+                setContent { ValenApp(coordinator, playlists) }
+                settle()
+
+                promptFlow.value = app.valen.core.SignInPrompt(
+                    provider = ProviderId.SPOTIFY,
+                    loginUrl = "https://accounts.spotify.com/login",
+                    status = "Finish signing in in your browser.",
+                    hasBrowserProfile = true,
+                    cookieHint = "sp_dc",
+                    onOpenBrowser = {},
+                    onCheckNow = {},
+                    onImportFile = {},
+                    onPasteCookie = { pasted ->
+                        pastedToken = pasted
+                        promptFlow.value = null
+                    },
+                    onCancel = {
+                        cancelled = true
+                        promptFlow.value = null
+                    },
+                )
+                settle(900L)
+                onNodeWithText("Sign in to Spotify").assertExists()
+                onNodeWithText("Check browser").assertExists()
+                onNodeWithText("Import cookies.txt").assertExists()
+                onNode(hasSetTextAction()).performTextInput("sp_dc=AQ_test")
+                onNodeWithText("Use").performClick()
+                settle(900L)
+                assertEquals("sp_dc=AQ_test", pastedToken)
+                onNodeWithText("Sign in to Spotify").assertDoesNotExist()
+
+                // Opening again and cancelling clears the sheet.
+                promptFlow.value = app.valen.core.SignInPrompt(
+                    provider = ProviderId.YOUTUBE_MUSIC,
+                    loginUrl = "https://music.youtube.com/",
+                    status = "Waiting",
+                    hasBrowserProfile = false,
+                    cookieHint = "SAPISID",
+                    onOpenBrowser = {},
+                    onCheckNow = {},
+                    onImportFile = {},
+                    onPasteCookie = {},
+                    onCancel = {
+                        cancelled = true
+                        promptFlow.value = null
+                    },
+                )
+                settle(900L)
+                onNodeWithText("Sign in to YouTube Music").assertExists()
+                onNodeWithText("Cancel").performSemanticsAction(SemanticsActions.OnClick)
+                settle(900L)
+                assertTrue(cancelled)
+                onNodeWithText("Sign in to YouTube Music").assertDoesNotExist()
+            }
         }
     }
 }

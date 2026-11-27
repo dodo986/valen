@@ -94,6 +94,15 @@ unmodified library dependency, not vendored source. GPL-3.0, the licence Valen a
 Native playback runs `ffplay` from the system's FFmpeg as a separate process; FFmpeg is a runtime
 dependency and is not included in Valen's packages. Valen decodes nothing itself.
 
+## Google Chrome & Widevine CDM (Spotify Web Player runtime)
+
+Spotify playback on Linux desktop executes Google Chrome + Widevine CDM (`libwidevinecdm.so`)
+out-of-process over CDP (`ChromeLauncher`) solely as an isolated headless Web Player engine.
+Google Chrome and Widevine CDM are proprietary software governed by Google's Terms of Service and
+the Widevine EULA; they are not open-source components of Valen, and public redistribution of
+proprietary Chrome/Widevine binaries requires appropriate authorization from Google (see
+`packaging/README.md`).
+
 ## Fonts and icons
 
 - Bricolage Grotesque — SIL Open Font License 1.1.

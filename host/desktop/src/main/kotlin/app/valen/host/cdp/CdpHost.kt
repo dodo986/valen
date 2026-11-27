@@ -98,11 +98,11 @@ class CdpHost private constructor(private val socket: WebSocket, private val lis
     }
 
     /** Sets each cookie ([name] to [value]) on [domain] for a year, secure, on the whole site. */
-    suspend fun setCookies(cookies: List<Pair<String, String>>, domain: String) {
+    suspend fun setCookies(cookies: List<Pair<String, String>>, domain: String, httpOnly: Boolean = false) {
         val expires = System.currentTimeMillis() / 1000.0 + 365 * 24 * 3600
         for ((name, value) in cookies) send("Network.setCookie", buildJsonObject {
             put("name", name); put("value", value); put("domain", domain); put("path", "/")
-            put("secure", true); put("expires", expires)
+            put("secure", true); put("httpOnly", httpOnly); put("expires", expires)
         })
     }
 

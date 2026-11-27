@@ -103,6 +103,7 @@ private fun windowRun(cli: Cli) {
             // No browser at boot: YouTube Music and SoundCloud resolve and play natively. Chrome
             // is Spotify's alone, and starts in the background from buildProviders.
             status = "Starting the players…"
+            hosts.refreshNativeSessions()
             val built = buildProvidersOrNothing(hosts, scope)
             status = "Starting the player…"
             val presence = DiscordPresence(scope)
@@ -114,6 +115,7 @@ private fun windowRun(cli: Cli) {
                 presence = presence,
                 version = ValenBuild.VERSION,
                 updates = updater.updates,
+                signInPrompt = hosts.signInPrompt,
             )
             updater.follow(coordinator)
             val playlists = buildPlaylists(built, coordinator)
@@ -196,6 +198,7 @@ private fun screenshotRun(cli: Cli) {
     val (coordinator, playlists) = runBlocking {
         // Screenshots show the settled app: Chrome is given the head start a real run gets from
         // working on the native providers first.
+        hosts.refreshNativeSessions()
         val chromeUp = runCatching { withContext(Dispatchers.IO) { hosts.start() } }.getOrDefault(false)
         if (!chromeUp) System.err.println("valen: Spotify's Chrome is not running: ${hosts.startError ?: "unknown reason"}")
         val built = buildProvidersOrNothing(hosts, scope)
@@ -209,6 +212,7 @@ private fun screenshotRun(cli: Cli) {
             version = ValenBuild.VERSION,
             // A screenshot never looks for updates; VALEN_CAPTURE_UPDATE shows one state of them.
             updates = Capture.updates(),
+            signInPrompt = Capture.signInPrompt() ?: hosts.signInPrompt,
         )
         cli.play?.let { play(coordinator, it) }
         coordinator to buildPlaylists(built, coordinator)

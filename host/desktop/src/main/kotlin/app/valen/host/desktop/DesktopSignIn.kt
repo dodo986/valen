@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.host.desktop
 
+import app.valen.core.ProviderId
 import app.valen.core.ProviderSignIn
 import app.valen.core.SessionState
+import app.valen.core.SignInPrompt
 import app.valen.host.cdp.CdpHost
 import app.valen.host.cdp.CdpPageHost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +19,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.nio.file.Paths
 
 /**
  * The tabs the desktop sign-ins talk to. [DesktopHosts] owns the Chrome and the CDP hosts; the
@@ -25,9 +30,8 @@ import java.io.IOException
  */
 interface SignInTabs {
     /**
-     * Puts a *window* on screen when the browser runs headless: a person cannot log in to a page
-     * they cannot see. Playback never calls this. Returns false when no window could be opened;
-     * [windowError] then says why, because a Connect that does nothing is a broken button.
+     * Puts a *window* on screen when the browser runs headless. Legacy path kept for tests;
+     * production sign-ins open the user's real external browser instead.
      */
     suspend fun ensureVisible(): Boolean
 
@@ -56,21 +60,189 @@ interface SignInTabs {
 }
 
 /**
- * Opens the window a sign-in happens in, or returns the state that says why none could be opened.
- * Every `connect` below starts with this: a sign-in that cannot show its page must say so instead
- * of leaving the person staring at a button that did nothing.
+ * Coordinates external-browser sign-in (`xdg-open`) and cookie import (`BrowserCookieReader`,
+ * `cookies.txt`, or pasted cookie string) into [DesktopSessionStore].
+ *
+ * Sign-in never opens an embedded or remote-debugged window; cookies are stored securely in
+ * [sessions] and never logged.
  */
-private suspend fun SignInTabs.requireWindow(label: String): SessionState.Unavailable? =
-    if (ensureVisible()) null
-    else SessionState.Unavailable(windowError ?: "Could not open a browser window to sign $label in")
+class ExternalSignIn(
+    val sessions: DesktopSessionStore,
+    val cookies: BrowserCookieReader,
+    private val scope: CoroutineScope,
+    private val openBrowser: suspend (String) -> Boolean = ::openExternalBrowser,
+    private val pollMs: Long = 1_500L,
+) {
+    private val _prompt = MutableStateFlow<SignInPrompt?>(null)
+    val prompt: StateFlow<SignInPrompt?> = _prompt.asStateFlow()
+
+    private var activeProvider: ProviderId? = null
+    private var pollJob: Job? = null
+
+    /**
+     * Starts external sign-in for [provider]. If a valid session is already present in an
+     * installed browser profile, it is imported immediately without interrupting the user;
+     * otherwise [loginUrl] is opened in the default browser and [SignInPrompt] stays open while
+     * polling for cookies or waiting for a file/paste import.
+     */
+    suspend fun begin(
+        provider: ProviderId,
+        loginUrl: String,
+        cookieHint: String,
+        onImported: suspend (BrowserCookieReader.ImportedSession) -> Unit,
+        onCancelled: () -> Unit,
+    ) {
+        cancel(activeProvider)
+        activeProvider = provider
+
+        val existing = cookies.readFromBrowsers(provider)
+        if (existing != null) {
+            onImported(existing)
+            activeProvider = null
+            _prompt.value = null
+            return
+        }
+
+        val hasProfiles = withContext(Dispatchers.IO) { cookies.hasReadableBrowser() }
+        val opened = openBrowser(loginUrl)
+        val initialStatus = when {
+            !opened -> "Could not open your browser automatically. Open $loginUrl or import cookies below."
+            hasProfiles -> "Finish signing in in your browser. Valen is checking your session…"
+            else -> "Finish signing in in your browser, then import cookies.txt or paste your cookie below."
+        }
+
+        fun updatePrompt(status: String = initialStatus, error: String? = null) {
+            if (activeProvider != provider) return
+            _prompt.value = SignInPrompt(
+                provider = provider,
+                loginUrl = loginUrl,
+                status = status,
+                hasBrowserProfile = hasProfiles,
+                cookieHint = cookieHint,
+                error = error,
+                onOpenBrowser = { scope.launch { openBrowser(loginUrl) } },
+                onCheckNow = {
+                    scope.launch {
+                        val scan = cookies.scanBrowsers(provider)
+                        if (scan.session != null) {
+                            finish(provider, scan.session, onImported)
+                        } else {
+                            val detail = when {
+                                scan.decryptionFailedProfiles.isNotEmpty() ->
+                                    "Could not decrypt cookies from ${scan.decryptionFailedProfiles.joinToString(", ")} (keyring locked or unsupported store). Import cookies.txt or paste $cookieHint below."
+                                scan.checkedProfiles.isNotEmpty() ->
+                                    "Checked ${scan.checkedProfiles.joinToString(", ")} — no ${provider.label} session saved on disk yet. Wait a few seconds after signing in, or import cookies.txt / paste below."
+                                else ->
+                                    "No readable browser cookie stores found. Import cookies.txt or paste $cookieHint below."
+                            }
+                            updatePrompt(status = initialStatus, error = detail)
+                        }
+                    }
+                },
+                onImportFile = { filePath ->
+                    scope.launch {
+                        val found = cookies.readFromFile(provider, Paths.get(filePath))
+                        if (found != null) {
+                            finish(provider, found, onImported)
+                        } else {
+                            updatePrompt(
+                                status = initialStatus,
+                                error = "That file does not contain a valid ${provider.label} session ($cookieHint).",
+                            )
+                        }
+                    }
+                },
+                onPasteCookie = { pasted ->
+                    scope.launch {
+                        val found = cookies.parseInput(provider, pasted)
+                        if (found != null) {
+                            finish(provider, found, onImported)
+                        } else {
+                            updatePrompt(
+                                status = initialStatus,
+                                error = "Could not find $cookieHint in the pasted text.",
+                            )
+                        }
+                    }
+                },
+                onCancel = {
+                    cancel(provider)
+                    onCancelled()
+                },
+            )
+        }
+
+        updatePrompt()
+        if (hasProfiles) {
+            pollJob = scope.launch {
+                while (isActive && activeProvider == provider) {
+                    delay(pollMs)
+                    val found = runCatching { cookies.readFromBrowsers(provider) }.getOrNull()
+                    if (found != null) {
+                        finish(provider, found, onImported)
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun finish(
+        provider: ProviderId,
+        imported: BrowserCookieReader.ImportedSession,
+        onImported: suspend (BrowserCookieReader.ImportedSession) -> Unit,
+    ) {
+        if (activeProvider != provider) return
+        pollJob?.cancel()
+        pollJob = null
+        activeProvider = null
+        _prompt.value = null
+        onImported(imported)
+    }
+
+    fun cancel(provider: ProviderId?) {
+        if (provider != null && activeProvider != provider) return
+        pollJob?.cancel()
+        pollJob = null
+        activeProvider = null
+        _prompt.value = null
+    }
+
+    fun close() {
+        cancel(null)
+    }
+}
+
+/** Opens [url] in the user's default Linux desktop browser (`xdg-open` / `gio open`). */
+internal suspend fun openExternalBrowser(url: String): Boolean = withContext(Dispatchers.IO) {
+    val pathEnv = System.getenv("PATH").orEmpty()
+    val candidates = listOf(
+        listOf("xdg-open", url),
+        listOf("gio", "open", url),
+        listOf("sensible-browser", url),
+    )
+    for (cmd in candidates) {
+        val exe = BrowserCookieReader.findOnPath(cmd[0], pathEnv) ?: continue
+        val started = runCatching {
+            ProcessBuilder(listOf(exe.toString()) + cmd.drop(1))
+                .also { BrowserCookieReader.cleanAppImageEnv(it.environment()) }
+                .redirectInput(ProcessBuilder.Redirect.from(java.io.File("/dev/null")))
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+        }.isSuccess
+        if (started) return@withContext true
+    }
+    false
+}
 
 /**
- * Sign-in on the desktop: the service's own page in the private Chrome, exactly as the user would
- * use it. No credentials pass through Valen; the session is what the browser keeps.
+ * Sign-in on the desktop.
  *
- * [state] is polled rather than pushed, because the page under it is a web app that says nothing
- * when its account changes: a session cookie appearing or disappearing is the whole signal MPRIS
- * and the queue need. (Spotify's `sp_dc`, YouTube Music's `SAPISID`, SoundCloud's `oauth_token`.)
+ * When [external] is present (normal app execution), all three services authenticate in the user's
+ * real external browser and store sessions in [DesktopSessionStore] — no in-app sign-in window, and
+ * YouTube Music / SoundCloud never touch Chromium at all. The legacy [tabs] path remains intact
+ * when [external] is null for existing unit tests.
  */
 abstract class DesktopSignIn(
     protected val tabs: SignInTabs,
@@ -85,22 +257,24 @@ abstract class DesktopSignIn(
     private val sessionLock = Mutex()
     @Volatile private var closed = false
 
+    /** Whether [refresh] requires Chrome's background browser to be running. */
+    protected open val needsBrowserForProbe: Boolean get() = true
+
     /** One probe of the service, run while the sign-in polls. */
     protected abstract suspend fun probe(): SessionState
 
     /** Runs [probe] now and publishes the answer. */
     suspend fun refresh(): SessionState = sessionLock.withLock {
-        // A browser being launched or replaced has no page to answer yet. Publishing that as a
-        // failure would flash "Offline" over a sign-in that is working, so the last answer stands.
-        if (closed || tabs.browserStarting) return mutableState.value
+        if (closed) return mutableState.value
+        if (needsBrowserForProbe && tabs.browserStarting) return mutableState.value
         val next = try {
-            if (!tabs.ensureBackground()) throw IOException(tabs.windowError ?: "Browser recovery failed")
+            if (needsBrowserForProbe && !tabs.ensureBackground()) {
+                throw IOException(tabs.windowError ?: "Browser recovery failed")
+            }
             probe()
         } catch (e: CancellationException) {
             throw e
-        } catch (e: IOException) {
-            // The browser is gone (closed, replaced by a crash). "Failed to connect to
-            // /127.0.0.1:9333" is not something a person can act on.
+        } catch (_: IOException) {
             SessionState.Unavailable("The browser is not running: press Connect to open it again")
         } catch (e: Exception) {
             SessionState.Unavailable(e.message ?: "The sign-in page is not reachable")
@@ -113,7 +287,9 @@ abstract class DesktopSignIn(
     protected suspend fun signOut(clear: suspend () -> Unit) = sessionLock.withLock {
         if (closed) return@withLock
         val next = try {
-            check(tabs.ensureBackground()) { tabs.windowError ?: "Could not reopen the browser to sign out" }
+            if (needsBrowserForProbe) {
+                check(tabs.ensureBackground()) { tabs.windowError ?: "Could not reopen the browser to sign out" }
+            }
             clear()
             SessionState.SignedOut
         } catch (e: CancellationException) {
@@ -140,7 +316,7 @@ abstract class DesktopSignIn(
         poller = null
     }
 
-    /** Stops observing at app shutdown; the browser's saved cookies are left intact. */
+    /** Stops observing at app shutdown; the saved session is left intact. */
     fun close() {
         closed = true
         stopPolling()
@@ -149,75 +325,135 @@ abstract class DesktopSignIn(
 }
 
 /**
- * Spotify: the Web Player tab signed in. Connected when the browser holds Spotify's account
- * cookie (`sp_dc`), the same signal the Web Player itself trusts.
- *
- * The page's markup was the old signal ("no login button on open.spotify.com"). It read the
- * "Unsupported browser" page as connected: that page is on open.spotify.com, has no login button
- * and no player either, so the tile claimed an account while every play timed out. A cookie is
- * what a session actually is.
+ * Spotify: external-browser sign-in (`sp_dc` imported into [DesktopSessionStore]) combined with
+ * Valen's headless bundled Chrome playback engine.
  */
 class SpotifySignIn(
     tabs: SignInTabs,
     scope: CoroutineScope,
     pollMs: Long = 4_000,
+    private val external: ExternalSignIn? = null,
 ) : DesktopSignIn(tabs, scope, pollMs) {
 
+    override val needsBrowserForProbe: Boolean get() = external == null
+
     override suspend fun connect() {
+        if (external != null) {
+            mutableState.value = SessionState.Connecting
+            external.begin(
+                provider = ProviderId.SPOTIFY,
+                loginUrl = LOGIN_URL,
+                cookieHint = "sp_dc",
+                onImported = { imported ->
+                    val spDc = (imported as BrowserCookieReader.ImportedSession.Spotify).spDc
+                    external.sessions.saveSpotifySpDc(spDc)
+                    wasConnected = false
+                    injectIntoBrowserIfReady(spDc)
+                    refresh()
+                },
+                onCancelled = {
+                    if (mutableState.value is SessionState.Connecting) {
+                        scope.launch { refresh() }
+                    }
+                },
+            )
+            return
+        }
         mutableState.value = SessionState.Connecting
-        // The login has to happen in a window, even though playback does not need one.
-        tabs.requireWindow("in to Spotify")?.let { mutableState.value = it; return }
+        if (!tabs.ensureVisible()) {
+            mutableState.value = SessionState.Unavailable(tabs.windowError ?: "Could not open a browser window to sign in to Spotify")
+            return
+        }
         val host = runCatching { tabs.spotify() }.getOrElse {
             mutableState.value = SessionState.Unavailable(it.message ?: "Spotify did not open")
             return
         }
-        // A window that is already up is not necessarily in front: raise it on the login page.
         runCatching { host.activate() }
         refresh()
         startPolling()
     }
 
-    override suspend fun disconnect() = signOut {
-        val host = tabs.spotify()
-        // Leaving the page to accounts.spotify.com/logout was not a sign-out: the Web Player's tab
-        // kept the session's cookies, so the next probe (and the next play) was still signed in.
-        host.clearCookies(SESSION_URLS)
-        wasConnected = false
-        host.navigate(HOME)
+    override suspend fun disconnect() {
+        external?.cancel(ProviderId.SPOTIFY)
+        signOut {
+            external?.sessions?.clear(ProviderId.SPOTIFY)
+            wasConnected = false
+            // Best-effort clear in Chrome if Chrome is available (or in legacy mode).
+            if (external == null || runCatching { tabs.ensureBackground() }.getOrDefault(false)) {
+                runCatching {
+                    val host = tabs.spotify()
+                    host.clearCookies(SESSION_URLS)
+                    host.navigate(HOME)
+                }
+            }
+        }
     }
 
     override suspend fun probe(): SessionState {
+        if (external != null) {
+            val storedSpDc = external.sessions.spotifySpDc()
+            val browserHasCookie = !tabs.browserStarting &&
+                runCatching { ACCOUNT_COOKIE in tabs.cookieNames(HOME) }.getOrDefault(false)
+            if (storedSpDc == null && !browserHasCookie) {
+                wasConnected = false
+                return SessionState.SignedOut
+            }
+            if (storedSpDc != null && !tabs.browserStarting) {
+                injectIntoBrowserIfReady(storedSpDc)
+            }
+            val name = if (!tabs.browserStarting) {
+                runCatching {
+                    val host = tabs.spotify()
+                    if (!wasConnected) {
+                        wasConnected = reloadDone(host.pageKind()) { runCatching { host.reload() }.isSuccess }
+                    }
+                    readAccountName(host)
+                }.getOrNull()
+            } else null
+            if (name != null) lastKnownName = name
+            return SessionState.Connected(name ?: lastKnownName)
+        }
+
         if (ACCOUNT_COOKIE !in tabs.cookieNames(HOME)) {
             wasConnected = false
             return SessionState.SignedOut
         }
         val host = tabs.spotify()
-        // Signed in, but the tab may still be sitting on Spotify's sign-in page: the login can
-        // finish in a page of its own (accounts.spotify.com, a popup) and leave this tab behind.
-        // The cookies are now there, so one reload turns this tab into the player the bridge needs.
         if (!wasConnected) {
             wasConnected = reloadDone(host.pageKind()) { runCatching { host.reload() }.isSuccess }
         }
-        val name = runCatching {
-            host.evaluateValue("document.querySelector('[data-testid=\"user-widget-link\"]')?.getAttribute('aria-label') ?? 'null'")
-                ?.let { kotlinx.serialization.json.Json.parseToJsonElement(it).toString() }
-                ?.removeSurrounding("\"")
-                ?.takeIf { it.isNotBlank() && it != "null" }
-        }.getOrNull()
+        val name = readAccountName(host)
         return SessionState.Connected(name)
     }
 
+    private suspend fun injectIntoBrowserIfReady(spDc: String) {
+        if (tabs.browserStarting) return
+        runCatching {
+            val has = ACCOUNT_COOKIE in tabs.cookieNames(HOME)
+            val host = tabs.spotify()
+            if (!has) {
+                host.setCookies(listOf(ACCOUNT_COOKIE to spDc), ".spotify.com", httpOnly = true)
+                host.navigate(HOME)
+                wasConnected = true
+            }
+        }
+    }
+
+    private suspend fun readAccountName(host: CdpHost): String? = runCatching {
+        host.evaluateValue("document.querySelector('[data-testid=\"user-widget-link\"]')?.getAttribute('aria-label') ?? 'null'")
+            ?.let { kotlinx.serialization.json.Json.parseToJsonElement(it).toString() }
+            ?.removeSurrounding("\"")
+            ?.takeIf { it.isNotBlank() && it != "null" }
+    }.getOrNull()
+
     /** Whether an account was already seen: that transition is what earns the one reload. */
     @Volatile private var wasConnected = false
+    @Volatile private var lastKnownName: String? = null
 
     private companion object {
-        /** `/preferences#login` is where an account-less Web Player tab lands; the account cookie is the truth. */
         const val HOME = "https://open.spotify.com/"
-
-        /** Spotify's own account cookie. Its value never leaves the browser. */
+        const val LOGIN_URL = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
         const val ACCOUNT_COOKIE = "sp_dc"
-
-        /** Every site whose cookies hold a Spotify session (all deleted at sign-out). */
         val SESSION_URLS = listOf(
             "https://open.spotify.com", "https://accounts.spotify.com",
             "https://www.spotify.com", "https://spotify.com", "https://api.spotify.com",
@@ -225,33 +461,17 @@ class SpotifySignIn(
     }
 }
 
-/**
- * What the Web Player's tab is showing. [UNKNOWN] is deliberately not "not the login page": the
- * document can still be loading (its `readyState` is then not `complete`), and a page that cannot
- * be read is no evidence either. Treating either as "already a player" spent the one reload before
- * the sign-in page had even rendered, so a login that finished in another tab left this one behind.
- */
 internal enum class PageKind { LOGIN, PLAYER, UNKNOWN }
 
-/** The page kind from the JSON [CdpHost.evaluateValue] returned; anything unexpected is unknown. */
 internal fun pageKindOf(value: String?): PageKind = when (value) {
     "\"login\"" -> PageKind.LOGIN
     "\"player\"" -> PageKind.PLAYER
     else -> PageKind.UNKNOWN
 }
 
-/**
- * Which page this tab is on. Used to decide whether one reload is owed after an account appeared in
- * the browser (the login may have happened in another tab, leaving this one on the sign-in screen
- * with no player behind it).
- */
 private suspend fun CdpHost.pageKind(): PageKind = pageKindOf(
     runCatching {
         evaluateValue(
-            // A page with Valen's bridge in it is the player, whatever its route: the bridge parks
-            // the Web Player on /preferences once it boots (the light page; see player-bridge.js
-            // IDLE_ROUTE), and reading that route as "the sign-in page" reloaded the player at
-            // every start, killing a song started in the first seconds.
             "(function(){try{return document.readyState !== 'complete' ? 'unknown' : (window.Myspoti ? 'player' :" +
                 " (location.pathname.indexOf('/login') >= 0" +
                 " || location.pathname.indexOf('/preferences') >= 0" +
@@ -260,12 +480,6 @@ private suspend fun CdpHost.pageKind(): PageKind = pageKindOf(
     }.getOrNull(),
 )
 
-/**
- * Whether the one reload owed after an account appeared has been done. A reload only counts once it
- * was actually sent; a page that is still loading, could not be read, or whose reload failed stays
- * eligible, so a login that finishes in another tab is picked up by a later probe instead of being
- * written off by the first one.
- */
 internal suspend fun reloadDone(kind: PageKind, reload: suspend () -> Boolean): Boolean = when (kind) {
     PageKind.LOGIN -> reload()
     PageKind.PLAYER -> true
@@ -273,26 +487,47 @@ internal suspend fun reloadDone(kind: PageKind, reload: suspend () -> Boolean): 
 }
 
 /**
- * YouTube Music: connected when the browser holds the account cookie the web app's auth header is
- * made from (`SAPISID`, or its `__Secure-3PAPISID` twin).
+ * YouTube Music: external-browser sign-in stored in [DesktopSessionStore] (zero Chromium
+ * dependency). Falls back to [tabs] only when [external] is null (unit tests).
  */
 class YtMusicSignIn(
     tabs: SignInTabs,
     scope: CoroutineScope,
     pollMs: Long = 4_000,
+    private val external: ExternalSignIn? = null,
 ) : DesktopSignIn(tabs, scope, pollMs) {
 
+    override val needsBrowserForProbe: Boolean get() = external == null
+
     override suspend fun connect() {
+        if (external != null) {
+            mutableState.value = SessionState.Connecting
+            external.begin(
+                provider = ProviderId.YOUTUBE_MUSIC,
+                loginUrl = LOGIN_URL,
+                cookieHint = "SAPISID or Cookie header",
+                onImported = { imported ->
+                    val header = (imported as BrowserCookieReader.ImportedSession.YoutubeMusic).cookieHeader
+                    external.sessions.saveYoutubeCookies(header)
+                    refresh()
+                },
+                onCancelled = {
+                    if (mutableState.value is SessionState.Connecting) {
+                        scope.launch { refresh() }
+                    }
+                },
+            )
+            return
+        }
         mutableState.value = SessionState.Connecting
-        tabs.requireWindow("in to YouTube Music")?.let { mutableState.value = it; return }
-        // A page that cannot be opened is a Connect that must say so, not an exception thrown at
-        // the UI (Spotify already did this; the other two left the button looking dead).
+        if (!tabs.ensureVisible()) {
+            mutableState.value = SessionState.Unavailable(tabs.windowError ?: "Could not open a browser window to sign in to YouTube Music")
+            return
+        }
         val page = runCatching { tabs.youtubeMusic() }.getOrElse {
             mutableState.value = SessionState.Unavailable(it.message ?: "YouTube Music did not open")
             return
         }
-        // A page whose socket is gone cannot be signed in on. Say so and stop: refreshing would
-        // only repeat the same failure, and a poller started here could never recover.
         try {
             page.navigate(HOME)
         } catch (e: CancellationException) {
@@ -306,13 +541,25 @@ class YtMusicSignIn(
         startPolling()
     }
 
-    override suspend fun disconnect() = signOut {
-        val page = tabs.youtubeMusic()
-        page.clear()
-        page.navigate(HOME)
+    override suspend fun disconnect() {
+        external?.cancel(ProviderId.YOUTUBE_MUSIC)
+        signOut {
+            if (external != null) {
+                external.sessions.clear(ProviderId.YOUTUBE_MUSIC)
+            } else {
+                val page = tabs.youtubeMusic()
+                page.clear()
+                page.navigate(HOME)
+            }
+        }
     }
 
     override suspend fun probe(): SessionState {
+        if (external != null) {
+            val header = external.sessions.youtubeCookies()
+            if (!header.isNullOrBlank()) return SessionState.Connected()
+            return SessionState.SignedOut
+        }
         val names = tabs.cookieNames(ORIGIN)
         return if (names.any { it in SIGN_IN_COOKIES }) SessionState.Connected() else SessionState.SignedOut
     }
@@ -320,25 +567,53 @@ class YtMusicSignIn(
     companion object {
         const val ORIGIN = "https://music.youtube.com"
         const val HOME = "$ORIGIN/"
+        const val LOGIN_URL = "https://accounts.google.com/ServiceLogin?ltmpl=music&service=youtube&passive=true" +
+            "&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F"
         private val SIGN_IN_COOKIES = setOf("SAPISID", "__Secure-3PAPISID")
     }
 }
 
-/** SoundCloud: connected when the browser holds its `oauth_token` cookie. */
+/**
+ * SoundCloud: external-browser sign-in stored in [DesktopSessionStore] (zero Chromium dependency).
+ */
 class SoundCloudSignIn(
     tabs: SignInTabs,
     scope: CoroutineScope,
     pollMs: Long = 4_000,
+    private val external: ExternalSignIn? = null,
 ) : DesktopSignIn(tabs, scope, pollMs) {
 
+    override val needsBrowserForProbe: Boolean get() = external == null
+
     override suspend fun connect() {
+        if (external != null) {
+            mutableState.value = SessionState.Connecting
+            external.begin(
+                provider = ProviderId.SOUNDCLOUD,
+                loginUrl = LOGIN_URL,
+                cookieHint = "oauth_token",
+                onImported = { imported ->
+                    val sc = imported as BrowserCookieReader.ImportedSession.SoundCloud
+                    external.sessions.saveSoundCloudTokens(sc.accessToken, sc.refreshToken)
+                    refresh()
+                },
+                onCancelled = {
+                    if (mutableState.value is SessionState.Connecting) {
+                        scope.launch { refresh() }
+                    }
+                },
+            )
+            return
+        }
         mutableState.value = SessionState.Connecting
-        tabs.requireWindow("in to SoundCloud")?.let { mutableState.value = it; return }
+        if (!tabs.ensureVisible()) {
+            mutableState.value = SessionState.Unavailable(tabs.windowError ?: "Could not open a browser window to sign in to SoundCloud")
+            return
+        }
         val page = runCatching { tabs.soundCloud() }.getOrElse {
             mutableState.value = SessionState.Unavailable(it.message ?: "SoundCloud did not open")
             return
         }
-        // See `YtMusicSignIn.connect`: a navigation that cannot be sent is the whole failure.
         try {
             page.navigate(HOME)
         } catch (e: CancellationException) {
@@ -352,13 +627,23 @@ class SoundCloudSignIn(
         startPolling()
     }
 
-    override suspend fun disconnect() = signOut {
-        val page = tabs.soundCloud()
-        page.clear()
-        page.navigate(HOME)
+    override suspend fun disconnect() {
+        external?.cancel(ProviderId.SOUNDCLOUD)
+        signOut {
+            if (external != null) {
+                external.sessions.clear(ProviderId.SOUNDCLOUD)
+            } else {
+                val page = tabs.soundCloud()
+                page.clear()
+                page.navigate(HOME)
+            }
+        }
     }
 
     override suspend fun probe(): SessionState {
+        if (external != null) {
+            return if (external.sessions.soundCloudTokens() != null) SessionState.Connected() else SessionState.SignedOut
+        }
         val names = tabs.cookieNames(ORIGIN)
         return if (SIGN_IN_COOKIE in names) SessionState.Connected() else SessionState.SignedOut
     }
@@ -366,6 +651,7 @@ class SoundCloudSignIn(
     companion object {
         const val ORIGIN = "https://soundcloud.com"
         const val HOME = "$ORIGIN/"
+        const val LOGIN_URL = "https://soundcloud.com/signin"
         private const val SIGN_IN_COOKIE = "oauth_token"
     }
 }

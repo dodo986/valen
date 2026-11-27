@@ -245,12 +245,25 @@ fun ValenApp(
                 // "Your week", over everything (chrome too) while it is told.
                 WeekStoryHost(coordinator = coordinator, playlists = playlists)
                 // The welcome, once, over everything until it is done; it fades up and away.
+                val compactWelcome = maxWidth < Layout.railFrom
                 AnimatedVisibility(
                     visible = !settings.onboarded,
                     enter = fadeIn(Motion.fade()),
                     exit = fadeOut(Motion.pour()) + scaleOut(Motion.pour(), targetScale = 1.04f),
                 ) {
-                    WelcomeFlow(coordinator)
+                    val welcomeBackdrop = remember { Backdrop() }
+                    Box(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize().backdropSource(welcomeBackdrop)) {
+                            WelcomeFlow(coordinator)
+                        }
+                        CompositionLocalProvider(LocalBackdrop provides welcomeBackdrop) {
+                            app.valen.ui.signin.SignInSheetHost(
+                                coordinator = coordinator,
+                                compact = compactWelcome,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -464,6 +477,14 @@ private fun WideApp(
             modifier = Modifier.fillMaxSize(),
         )
 
+        app.valen.ui.signin.SignInSheetHost(
+            coordinator = coordinator,
+            compact = false,
+            start = chrome.start,
+            bottom = chrome.bottom,
+            modifier = Modifier.fillMaxSize(),
+        )
+
         Notice(
             message = notice,
             confirmation = confirmation,
@@ -638,6 +659,7 @@ private fun PhoneApp(
         // The song menu over everything, sheets included.
         SongMenuHost(coordinator = coordinator, playlists = playlists, onSound = { nav.open(Route.Sound) }, compact = true, modifier = Modifier.fillMaxSize())
         app.valen.ui.update.UpdateSheetHost(coordinator = coordinator, compact = true, modifier = Modifier.fillMaxSize())
+        app.valen.ui.signin.SignInSheetHost(coordinator = coordinator, compact = true, modifier = Modifier.fillMaxSize())
     }
 }
 

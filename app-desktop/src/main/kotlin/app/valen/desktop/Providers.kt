@@ -90,9 +90,11 @@ suspend fun buildProviders(hosts: DesktopHosts, scope: CoroutineScope): Provider
     val providers = ArrayList<MusicProvider>(3)
     val failures = LinkedHashMap<ProviderId, String>()
     val youtube = YoutubeAudio()
-    // A renewed SoundCloud session is written back into the browser's cookie jar (best effort:
-    // without a running browser it lives for this run only, in SoundcloudAudio).
-    val soundcloud = SoundcloudAudio(persist = { hosts.setSoundCloudSession(it.accessToken, it.refreshToken) })
+    // Renewed SoundCloud sessions persist directly in DesktopSessionStore (no browser required).
+    val soundcloud = SoundcloudAudio(persist = {
+        hosts.sessions.saveSoundCloudTokens(it.accessToken, it.refreshToken)
+        hosts.setSoundCloudSession(it.accessToken, it.refreshToken)
+    })
     // Songs kept on disk for both native services: a song heard before, or the one up next,
     // plays from the file with no lookup and no network.
     val cacheDir = java.io.File(
@@ -123,9 +125,8 @@ suspend fun buildProviders(hosts: DesktopHosts, scope: CoroutineScope): Provider
                     hosts.ytMusicSignIn,
                     playback,
                     scope,
-                    // The account's playlists live on the page's session; searching and playing stay
-                    // signed out, as before. Reading a cookie never launches Chrome.
-                    cookies = { hosts.cookiesFor(YtMusicSignIn.ORIGIN) },
+                    // The account's playlists live in DesktopSessionStore; never launches Chrome.
+                    cookies = { hosts.sessions.youtubeCookies() ?: hosts.cookiesFor(YtMusicSignIn.ORIGIN) },
                 )
             },
         ),
@@ -139,7 +140,11 @@ suspend fun buildProviders(hosts: DesktopHosts, scope: CoroutineScope): Provider
                     hosts.soundCloudSignIn,
                     playback,
                     soundcloud,
-                    session = { soundCloudSession(hosts) },
+                    session = {
+                        hosts.sessions.soundCloudTokens()?.let { (access, refresh) ->
+                            SoundcloudSession(access, refresh)
+                        } ?: soundCloudSession(hosts)
+                    },
                 )
             },
         ),
@@ -150,9 +155,8 @@ suspend fun buildProviders(hosts: DesktopHosts, scope: CoroutineScope): Provider
         val chosen: MusicProvider
         if (builder.browser != null) {
             // A browser-backed adapter (Spotify) is always behind the retry wrapper, even when it
-            // would build right now: the browser can be replaced under it — a sign-in turns the
-            // headless engine into a window — and the wrapper is what notices, drops the page that
-            // no longer exists and builds the next adapter in place.
+            // would build right now: the browser can be replaced under it, and the wrapper drops
+            // the stale page and rebuilds in place.
             chosen = RetryingProvider(
                 id = id,
                 scope = scope,
@@ -164,6 +168,9 @@ suspend fun buildProviders(hosts: DesktopHosts, scope: CoroutineScope): Provider
                 quiet = builder.quiet,
                 // The browser-backed service is Spotify, which plays for a signed-in account only.
                 playsSignedOut = false,
+                onConnect = { hosts.spotifySignIn.connect() },
+                onDisconnect = { hosts.spotifySignIn.disconnect() },
+                externalSession = hosts.spotifySignIn.state,
             )
             providers += chosen
         } else {
@@ -312,12 +319,16 @@ internal class RetryingProvider(
     private val pollMs: Long = 3_000,
     /** Whether the service behind it plays with no account (Spotify does not). */
     override val playsSignedOut: Boolean = true,
+    /** Direct sign-in hooks so external-browser login works before Chrome finishes starting. */
+    private val onConnect: (suspend () -> Unit)? = null,
+    private val onDisconnect: (suspend () -> Unit)? = null,
+    private val externalSession: StateFlow<SessionState>? = null,
 ) : MusicProvider, PlaylistCatalog, ArtistCatalog, LyricsCatalog {
 
     override val provider: ProviderId get() = id
 
     private val _session = MutableStateFlow<SessionState>(
-        if (quiet) SessionState.SignedOut else SessionState.Unavailable(reason),
+        externalSession?.value ?: if (quiet) SessionState.SignedOut else SessionState.Unavailable(reason),
     )
     override val session: StateFlow<SessionState> = _session.asStateFlow()
 
@@ -358,6 +369,13 @@ internal class RetryingProvider(
     private val settingsLock = Mutex()
 
     init {
+        if (externalSession != null) {
+            scope.launch {
+                externalSession.collect { state ->
+                    if (delegate == null) _session.value = state
+                }
+            }
+        }
         // A browser can also die without a replacement: the window closed, the engine crashed.
         // Without this the app would keep showing a song that stopped minutes ago. A browser that
         // was *replaced* (a sign-in turns the headless engine into a window) is noticed by
@@ -514,11 +532,17 @@ internal class RetryingProvider(
     }
 
     override suspend fun connect() {
-        ready()?.connect()
+        if (onConnect != null) {
+            onConnect.invoke()
+            // Warm the headless playback engine in the background if not already up.
+            scope.launch { ready() }
+        } else {
+            ready()?.connect()
+        }
     }
 
     override suspend fun disconnect() {
-        delegate?.disconnect()
+        if (onDisconnect != null) onDisconnect.invoke() else delegate?.disconnect()
     }
 
     override suspend fun search(query: String, limit: Int): List<Track> =

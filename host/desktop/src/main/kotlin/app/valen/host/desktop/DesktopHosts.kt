@@ -1,38 +1,46 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 package app.valen.host.desktop
 
+import app.valen.core.SignInPrompt
 import app.valen.host.cdp.CdpBrowser
 import app.valen.host.cdp.CdpHost
 import app.valen.host.cdp.CdpPageHost
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.net.URI
 
 /**
- * The desktop host: one Chrome with Valen's private profile, one CDP host on the Spotify Web Player
- * tab, one page host per page-based service (YouTube Music, SoundCloud), and the three sign-ins
- * built on them.
- *
- * Everything is attached lazily: an app that starts with Chrome missing still runs, and a provider
- * whose tab is never opened never opens one. [close] stops what this object started.
+ * The desktop host:
+ * - [sessions] + [cookieReader] + [externalSignIn] handle external-browser login and session
+ *   persistence for all three services (zero Chromium dependency for YTM & SoundCloud, and no
+ *   in-app Spotify sign-in).
+ * - [chrome] is Valen's headless bundled playback engine for Spotify's Web Player alone.
  */
 class DesktopHosts(
     val scope: CoroutineScope,
     val chrome: ChromeLauncher = ChromeLauncher(),
+    val sessions: DesktopSessionStore = DesktopSessionStore(),
+    val cookieReader: BrowserCookieReader = BrowserCookieReader(),
 ) : SignInTabs, AutoCloseable {
 
     val cdpUrl: String get() = chrome.cdpUrl
 
     /**
-     * Bumped whenever the browser is replaced (a headless engine restarted as a window for a
-     * sign-in). An adapter built against the old browser is stale from that moment.
+     * Bumped whenever the browser is replaced. An adapter built against the old browser is stale
+     * from that moment.
      */
     val generation = kotlinx.coroutines.flow.MutableStateFlow(0)
 
-    val spotifySignIn = SpotifySignIn(this, scope)
-    val ytMusicSignIn = YtMusicSignIn(this, scope)
-    val soundCloudSignIn = SoundCloudSignIn(this, scope)
+    private val externalSignIn = ExternalSignIn(sessions, cookieReader, scope)
+
+    /** Active external-browser sign-in prompt, observed by the UI shell. */
+    val signInPrompt: StateFlow<SignInPrompt?> get() = externalSignIn.prompt
+
+    val spotifySignIn = SpotifySignIn(this, scope, external = externalSignIn)
+    val ytMusicSignIn = YtMusicSignIn(this, scope, external = externalSignIn)
+    val soundCloudSignIn = SoundCloudSignIn(this, scope, external = externalSignIn)
 
     private val lock = Mutex()
     private val stateGuard = Any()
@@ -45,7 +53,6 @@ class DesktopHosts(
             val before = chrome.launchCount
             val ok = chrome.start(visible)
             if (ok && (chrome.launchCount != before || spotifyHost?.isOpen == false)) {
-                // A live browser can have a dead tab. Invalidate its adapter in both cases.
                 dropHosts()
                 generation.value += 1
             }
@@ -58,25 +65,31 @@ class DesktopHosts(
     )
 
     /**
-     * Launches (or reuses) Chrome and restores the three account states without service pages.
-     * [visible] is for a sign-in: the user has to see the page they log in on.
+     * Launches (or reuses) the headless Spotify Chrome and starts observing the three sign-ins.
      */
     suspend fun start(visible: Boolean = false): Boolean {
-        if (!browserSession.ensure(visible)) return false
-        spotifySignIn.startPolling()
-        // Restore account state without loading YouTube Music or SoundCloud pages.
+        // Native services read DesktopSessionStore regardless of whether Chrome starts.
         ytMusicSignIn.startPolling()
         soundCloudSignIn.startPolling()
+        if (!browserSession.ensure(visible)) {
+            spotifySignIn.startPolling()
+            return false
+        }
+        spotifySignIn.startPolling()
         return true
     }
 
-    /**
-     * Restarts the browser with a window, for a sign-in that a person has to complete. False when
-     * no window could be opened; [windowError] then says why.
-     */
-    override suspend fun ensureVisible(): Boolean = start(visible = true)
+    /** Restores native sign-in states at boot without launching Chrome. */
+    suspend fun refreshNativeSessions() {
+        ytMusicSignIn.refresh()
+        soundCloudSignIn.refresh()
+        spotifySignIn.refresh()
+    }
 
-    override suspend fun ensureBackground(): Boolean = browserSession.ensure()
+    /** Bundled Chrome stays headless for playback; sign-in happens in the user's real browser. */
+    override suspend fun ensureVisible(): Boolean = ensureBackground()
+
+    override suspend fun ensureBackground(): Boolean = browserSession.ensure(visible = false)
 
     override suspend fun cookieNames(url: String): Set<String> =
         CdpBrowser.cookieNames(cdpUrl, URI(url).host)
@@ -99,13 +112,25 @@ class DesktopHosts(
 
     override suspend fun spotify(): CdpHost = lock.withLock {
         check(!browserSession.closed) { "Valen is closing" }
-        spotifyHost?.takeIf { it.isOpen } ?: CdpHost.connect(cdpUrl = cdpUrl).also { host ->
-            synchronized(stateGuard) {
-                if (browserSession.closed) { host.close(); error("Valen is closing") }
-                if (spotifyHost != null) { spotifyHost?.close(); generation.value += 1 }
-                spotifyHost = host
+        val existing = spotifyHost?.takeIf { it.isOpen }
+        if (existing != null) return@withLock existing
+        val host = CdpHost.connect(cdpUrl = cdpUrl)
+        synchronized(stateGuard) {
+            if (browserSession.closed) { host.close(); error("Valen is closing") }
+            if (spotifyHost != null) { spotifyHost?.close(); generation.value += 1 }
+            spotifyHost = host
+        }
+        // Inject the imported `sp_dc` cookie right as the Web Player attaches.
+        sessions.spotifySpDc()?.let { spDc ->
+            runCatching {
+                val has = "sp_dc" in host.cookieNames("https://open.spotify.com/")
+                if (!has) {
+                    host.setCookies(listOf("sp_dc" to spDc), ".spotify.com", httpOnly = true)
+                    host.navigate("https://open.spotify.com/")
+                }
             }
         }
+        host
     }
 
     override suspend fun youtubeMusic(): CdpPageHost = lock.withLock {
@@ -144,35 +169,33 @@ class DesktopHosts(
     val startError: String? get() = chrome.lastError
 
     /**
-     * The browser's cookies for [url], read through the Web Player tab that already exists. Only a
-     * reachable browser answers: this never launches Chrome, so an account read cannot start one.
-     * Null also means no browser is running, which is the same thing to a caller (no session).
+     * Reads cookies from an already-attached Web Player tab without launching Chrome.
      */
     suspend fun cookiesFor(url: String): String? =
-        runCatching { spotify().cookieHeader(url) }.getOrNull()
+        spotifyHost?.takeIf { it.isOpen }?.let { host -> runCatching { host.cookieHeader(url) }.getOrNull() }
 
     /**
-     * Writes a renewed SoundCloud session back into the browser's cookie jar, through the Web
-     * Player tab [cookiesFor] reads it from (cookies are browser-wide). Never launches Chrome: with
-     * no browser running there is nothing to write, and the renewed session lives for this run only.
+     * Writes a renewed SoundCloud session back into Chrome's cookie jar if Chrome is already open.
+     * Primary persistence lives in [sessions].
      */
     suspend fun setSoundCloudSession(accessToken: String, refreshToken: String?) {
+        val host = spotifyHost?.takeIf { it.isOpen } ?: return
         runCatching {
             val cookies = buildList {
                 add("oauth_token" to accessToken)
                 refreshToken?.takeIf { it.isNotBlank() }?.let { add("oauth_refresh_token" to it) }
             }
-            spotify().setCookies(cookies, "soundcloud.com")
+            host.setCookies(cookies, "soundcloud.com", httpOnly = true)
         }
     }
 
     /**
-     * Recovers the browser before the adapter treats a lost connection as a failure. A start
-     * already in progress counts as alive; its generation invalidates the old adapter afterwards.
+     * Recovers the browser before the adapter treats a lost connection as a failure.
      */
     suspend fun browserAlive(): Boolean = browserStarting || ensureBackground()
 
     override fun close() {
+        externalSignIn.close()
         browserSession.close()
         spotifySignIn.close()
         ytMusicSignIn.close()

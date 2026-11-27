@@ -20,17 +20,30 @@ distro that prefers its own packaging.
   no browser is involved. `$VALEN_FFPLAY_BIN` overrides the binary, otherwise
   `ffplay` is taken from `PATH`. Without FFmpeg those two services report it on
   the first play and Spotify still works.
-- **A Chrome or Chromium binary, for Spotify only.** Spotify plays through the
-  Web Player in a Chrome Valen starts itself with a private profile, so no other
-  browser session is touched. It is started when Spotify is first used, never at
-  boot. The binary is found in this order:
+- **A Chrome or Chromium binary, for Spotify playback only.** Spotify plays through the
+  Web Player in a private headless Chrome instance with Widevine DRM (`--headless=new`),
+  so no separate browser window, desktop shortcut, or MPRIS entry is exposed. It is
+  started when Spotify is used, never for YouTube Music or SoundCloud. The binary is found
+  in this order:
   1. `$VALEN_CHROME_BIN`
-  2. `<checkout>/.tools/chrome/opt/google/chrome/chrome`
-  3. `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`,
+  2. Bundled Chrome inside the package (`$VALEN_BUNDLED_CHROME`, e.g. `Valen.AppDir/chrome/chrome`, or `/opt/valen/lib/chrome/chrome`)
+  3. `<checkout>/.tools/chrome/opt/google/chrome/chrome`
+  4. `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`,
      `/opt/google/chrome/chrome`, `/usr/bin/chromium` on `PATH`
 
-  A missing Chrome is not fatal: the window opens, YouTube Music and SoundCloud
-  play, and Spotify's tile says why it cannot start.
+  Sign-in no longer opens Chromium: clicking Connect opens the service in your default
+  desktop browser (`xdg-open`) and imports the session cookies from Firefox/Gecko or
+  Chromium profiles (or via `cookies.txt` / paste) into `$XDG_DATA_HOME/valen/sessions.json`
+  (`0600`), injecting `sp_dc` into the headless Spotify playback engine when it starts.
+  A missing Chrome is not fatal: the window opens, YouTube Music and SoundCloud work
+  (including sign-in and account playlists), and Spotify's tile says why it cannot start.
+
+  **Licensing & redistribution note:** Valen is GPL-3.0, while Google Chrome and its
+  Widevine CDM (`libwidevinecdm.so`) are proprietary software subject to Google's Terms
+  of Service and Widevine EULA. `ChromeLauncher` executes Chrome out-of-process over CDP
+  (an aggregate, not linked into Valen's JVM). `scripts/appimage.sh` and the release
+  workflow bundle Chrome inside the Linux AppImage so Spotify playback works out of the
+  box (set `VALEN_BUNDLE_CHROME=0` to omit it if redistributing without Chrome/Widevine).
 - **A session bus.** MPRIS (`org.mpris.MediaPlayer2.valen`) is what the media
   widget, the lock screen, the volume/media keys and `playerctl` talk to. Without
   a session bus the app still runs and says so on stderr.
@@ -50,13 +63,15 @@ distro that prefers its own packaging.
 
 | What | Path (default) | Override |
 | --- | --- | --- |
-| Chrome profile (the sign-ins) | `~/.local/share/valen/chrome` | `$XDG_DATA_HOME`, `$VALEN_CHROME_PROFILE` |
+| Imported sessions (`sp_dc`, YTM, SoundCloud) | `~/.local/share/valen/sessions.json` (`0600`) | `$XDG_DATA_HOME` |
+| Chrome profile (headless Spotify Web Player) | `~/.local/share/valen/chrome` | `$XDG_DATA_HOME`, `$VALEN_CHROME_PROFILE` |
 | Chrome log | `<profile>/chrome.log` | — |
 | Settings (`settings.json`) | `~/.config/valen/settings.json` | `$XDG_CONFIG_HOME` |
 
-The Chrome profile holds the user's sessions for all three services (YouTube Music and SoundCloud
-only use it for a sign-in: playback never goes through it). Treat it like a password store: never
-copy, log or commit it. Signing out in the app deletes that service's cookies from it.
+`sessions.json` holds the user's imported sessions (`0600` owner-only permissions), and the Chrome
+profile holds Spotify's playback engine state. Treat both like a password store: never copy, log,
+or commit them. Signing out in the app deletes that service's session from `sessions.json` and
+clears any matching cookies from Chrome if running.
 
 Closing a login window does not sign out. While Valen is open, it recovers the browser without a
 window using the same profile. If Chrome stays alive after its last window closes, Valen switches
