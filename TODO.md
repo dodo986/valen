@@ -1,7 +1,8 @@
 # Valen — TODO
 
 ## P1 — Go All In
-- [ ] Wait for Spotishit to open source so that we can protect Spotify playback from DMCA and fix Android's Spotify.
+- [x] Fix Android's Spotify — Revera's sign-in relay ported and verified (2026-11-28; see HANDOFF.md).
+- [ ] Protect Spotify playback from DMCA (still waiting for Spotify to open source).
 - [ ] Device sync: One profile across Android and desktop.
 - [ ] [NoteBurner](https://www.noteburner.com/en1/) as a playback source (said to have a HUGE database).
 - [ ] Supabase backend + online accounts (? maybe), optional for sure.

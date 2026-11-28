@@ -23,7 +23,7 @@ Playback runs through each service's **own official player** (Spotify Web Player
 <details>
 <summary><b>how does it work??</b></summary>
 
-- **Spotify** runs through its official Web Player via Chrome DevTools on desktop. On Android, Spotify playback is disabled for now (`valen.android.spotify` in `gradle.properties`), so Spotify tracks fall back to YouTube Music or SoundCloud. Since the Spotify web player pauses if it thinks the tab is hidden, desktop Valen spoofs window focus so you can keep it in the background.
+- **Spotify** runs through its official Web Player via Chrome DevTools on desktop, and in a WebView on Android (the sign-in is Spotify's own page; Valen never sees the password). A build can leave it out with `valen.android.spotify=false`, and then Spotify tracks fall back to YouTube Music or SoundCloud. Since the Spotify web player pauses if it thinks the tab is hidden, desktop Valen spoofs window focus so you can keep it in the background.
 - **YouTube Music and SoundCloud** run natively on both platforms without a browser: [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor) grabs the stream URL, and `ffplay` handles audio on desktop while ExoPlayer takes care of it on Android.
 - **Spotify streams are never downloaded.** The audio is DRM-protected and Spotify actively flags bulk fetching. If you save a Spotify track for offline use, Valen grabs the matching recording from YouTube Music (or SoundCloud as a fallback) using strict track-matching rules.
 - **Encrypted HLS tracks on SoundCloud are skipped in search** rather than decrypted. Valen will offer the same song from another service instead.

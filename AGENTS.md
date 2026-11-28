@@ -49,6 +49,7 @@ Gradle call in a fresh shell.
 | This build's version and number | `./gradlew -q printVersion` (the version lives in `gradle.properties`, `valen.version`) |
 | A release | push a `v1.2.3[-alpha.N]` tag; `.github/workflows/release.yml`, see `RELEASING.md` |
 | Android compile check | `./gradlew :app-android:compileDebugKotlin` |
+| Android host tests (sign-in relay, browser identity, diagnostics) | `./gradlew :host:android:testDebugUnitTest` |
 | Android emulator (see §5) | `source scripts/env.sh; ANDROID_AVD_HOME=$PWD/.tools/avd $ANDROID_HOME/emulator/emulator -avd valen-test -no-window -no-boot-anim -gpu host -no-snapshot` |
 | APK for development | `./gradlew :app-android:assembleDebug` (`app.valen.debug`; debuggable, slow — never judge lag on it) |
 | APK for a phone | `./gradlew :app-android:assembleRelease` → `app-android/build/outputs/apk/release/app-android-release.apk` (`app.valen`, R8, debug-signed) |
@@ -186,11 +187,21 @@ packaging/       desktop entry, icon, packaging notes
 
 Key invariants:
 
-- **Spotify is frozen on Android.** `valen.android.spotify=false` (gradle.properties →
-  `BuildConfig.SPOTIFY`) means `ValenRuntime` makes no Web Player, no Spotify sign-in and no adapter.
-  The UI lists `coordinator.services` (the services the build has), never `ProviderId.services`, so
-  nothing offers Spotify there. A saved Spotify song plays from another service's copy of the same
-  recording. Setting the property to true brings it all back unchanged.
+- **Spotify runs on Android again, through Revera's sign-in relay.** `valen.android.spotify`
+  ([gradle.properties](gradle.properties), default true) becomes `BuildConfig.SPOTIFY`. False leaves
+  Spotify out of an Android build entirely: `ValenRuntime` makes no Web Player, no sign-in and no
+  adapter, the UI lists `coordinator.services` so nothing offers it, and a saved Spotify song plays
+  from another service's copy of the same recording. Spotify patched in-app sign-ins: the login
+  page's e-mail-code `POST`s to `accounts.spotify.com/login/code/send` and `/login/code/verify`
+  carried the WebView's `X-Requested-With`, so Spotify answered them 200 and never delivered them —
+  no code, no session. `host/android/.../LoginTransport` (Revera's workaround at `c0b705c`; see
+  `NOTICE`) wraps the page's `fetch` at document start, relays exactly those two paths from the app
+  without the mark, and writes every `Set-Cookie` back into the page's cookie jar; `PlatformStack`
+  sends them on the platform's Chromium stack on API 34+. The sign-in page is the phone's own mobile
+  Chrome (`MobileIdentity`) and the player page switches back to the desktop identity
+  (`BrowserIdentity`) as Spotify hands the session over. Sign-in, session retention across a restart
+  and playback were verified on the API 35 emulator (2026-11-28). Never remove the relay: without it
+  the code request is "sent" and never arrives.
 - **Updates come only from a release's manifest, and nothing unverified is installed.** The version
   lives in `gradle.properties` (`valen.version`); the root build makes its number
   (`ValenVersion.code`, also Android's `versionCode`) and both must stay in step (`ValenVersionTest`).
@@ -802,6 +813,21 @@ These cost hours before; do not relearn them.
   port of Orpheon's `ControlRelay`) wraps the page's `fetch` at document start and sends every
   `connect-state`/`track-playback` request from the app with OkHttp, the page's own headers and
   identity, without the mark; with it the emulator and a phone play. Never remove it.
+- **Spotify's sign-in needs the same relay, for the same reason.** The login page's `POST`s to
+  `accounts.spotify.com/login/code/send` and `/login/code/verify` carry the WebView's
+  `X-Requested-With` too, so Spotify answers them 200 and never delivers them: no e-mail code, no
+  sign-in (this is what froze Spotify on Android). `LoginTransport` wraps the page's `fetch` at
+  document start (only on `accounts.spotify.com`), relays exactly those two paths from the app, and
+  writes every `Set-Cookie` back into the page's `CookieManager` — attributes and order kept, so the
+  session lands in the profile as a browser's would; on API 34+ it goes out on the platform's
+  Chromium stack (`PlatformStack`), below it on OkHttp. The sign-in page must present the phone's
+  own mobile Chrome (`MobileIdentity`: UA and client hints agreeing, the 2026-11-16 trap again)
+  while the player page must be the desktop identity; `onPageStarted` switches back as Spotify hands
+  the page to `open.spotify.com`. `LoginDiagnostics` and the `sign-in step #n` /
+  `sign-in transport:` lines keep only stage, host, endpoint and status — never a cookie, a
+  `Set-Cookie`, a header, a body, an e-mail or the code. Ported from Revera at `c0b705c` (NOTICE);
+  `LoginTransportTest`, `LoginDiagnosticsTest` and the mobile cases in `BrowserIdentityTest` pin the
+  allow-list, the cookie preservation, the log hygiene and the UA/hints agreement.
 - **A snap or Flatpak browser keeps Valen's profile inside its own folder.** It cannot write to
   `~/.local/share/valen/chrome` (a hidden folder of the home directory), so Chromium fell back to
   a profile that died with the window: the sign-in was gone at every start and each start opened a
