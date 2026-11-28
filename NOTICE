@@ -22,6 +22,29 @@ plumbing of Orpheon (formerly Myspoti), by kota-zo and contributors:
 Every source file carries its SPDX header. Orpheon's authors require credit, retention of notices, and
 that derivative works are published under GPL-3.0 with complete source. Valen complies.
 
+## Revera — https://github.com/caruno-git/Revera (GPL-3.0), pinned at c0b705c
+
+Revera is a GPL-3.0 fork of Myspoti/Orpheon (`caruno-git/Revera`, `FORK.md`), and its visible fork
+notice requires credit to Myspoti, retention of notices, and GPL-3.0 with published source for
+derivatives. Valen complies: this code is GPL-3.0 and its source ships here.
+
+- `host/android/.../LoginTransport.kt`, `PlatformStack.kt` and `LoginDiagnostics.kt` are ported,
+  with adaptation, from Revera's `base/host-android/LoginTransport.kt`, `PlatformStack.kt` and
+  `LoginErrorDetails.kt` at commit `c0b705c`. That is Revera's workaround (shipped in its 1.0.9) for
+  Spotify's patched in-app sign-in: the sign-in page's `accounts.spotify.com` e-mail-code requests
+  are sent from the app, without the WebView's `X-Requested-With`, and their `Set-Cookie` headers are
+  written back into the page's cookie jar. `LoginDiagnostics` keeps only a stage, a host, an HTTP
+  status or a failure type.
+- `host/android/.../WebPlayerHost.kt`'s sign-in identity switch (the sign-in page as the phone's own
+  mobile Chrome, the player page as the desktop Chrome, switched back as Spotify hands over) follows
+  Revera's 1.0.2 sign-in fix (`configureLoginBrowser`/`configurePlayerBrowser`), still live at
+  `c0b705c`; `MobileIdentity` in `BrowserIdentity.kt` is Valen's own expression of the same identity
+  rule (its user agent and client hints must name the same browser).
+
+The `X-Requested-With` finding itself dates from Orpheon/Valen (`SpotifyRelay`); Revera found the
+sign-in form of it first. Revera's authors require credit to Myspoti and no relicensing; neither is
+done here.
+
 ## Mochy Music — https://github.com/realidkroo/Mochy-Music (GPL-3.0)
 
 Valen borrows design and implementation ideas, not files: the tight semi-bold type, the full-bleed
