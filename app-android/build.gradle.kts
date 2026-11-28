@@ -23,7 +23,7 @@ fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\
 fun signingSetting(name: String): String =
     (providers.gradleProperty(name).orNull ?: System.getenv(name) ?: localProperties.getProperty(name)).orEmpty().trim()
 val releaseKeystore = signingSetting("VALEN_KEYSTORE")
-val spotifyOnAndroid = (findProperty("valen.android.spotify") as String?)?.trim()?.toBoolean() ?: false
+val spotifyOnAndroid = (findProperty("valen.android.spotify") as String?)?.trim()?.toBoolean() ?: true
 
 android {
     namespace = "app.valen.android"
@@ -35,7 +35,8 @@ android {
         targetSdk = 36
         versionCode = rootProject.extra["valenVersionCode"] as Int
         versionName = rootProject.extra["valenVersion"] as String
-        // Spotify is frozen on Android for now (gradle.properties, valen.android.spotify).
+        // Spotify on Android (gradle.properties, valen.android.spotify): in the normal build, as on
+        // the desktop; a build can leave it out with -Pvalen.android.spotify=false.
         buildConfigField("boolean", "SPOTIFY", spotifyOnAndroid.toString())
         // Where updates come from: the releases of this repository (VALEN_UPDATE_REPO overrides).
         buildConfigField("String", "UPDATE_REPO", quoted(signingSetting("VALEN_UPDATE_REPO").ifEmpty { "dodo986/valen" }))
