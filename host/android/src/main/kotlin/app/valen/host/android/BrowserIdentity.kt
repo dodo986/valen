@@ -84,7 +84,7 @@ data class BrowserIdentity(val major: Int, val build: Int, val patch: Int, val k
         val KERNELS = listOf("6.8.0", "6.7.2", "6.6.9", "6.5.7", "6.9.1", "6.4.12")
 
         /** Used only when the WebView's version cannot be read. */
-        private const val FALLBACK_ENGINE = "142.0.7444.0"
+        internal const val FALLBACK_ENGINE = "142.0.7444.0"
 
         // Chromium's GREASE (components/embedder_support/user_agent_utils.cc).
         private val GREASE_CHARS = listOf(" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_")
@@ -135,6 +135,96 @@ data class BrowserIdentity(val major: Int, val build: Int, val patch: Int, val k
                     ?: KERNELS[Random.nextInt(KERNELS.size)].also { k -> runCatching { file.writeText(k) } }
                 resolve(engine, kernel)
             }.also { cached = it }
+        }
+    }
+}
+
+/**
+ * The phone's own Chrome, for Spotify's sign-in page.
+ *
+ * The Web Player wants a desktop browser (on a phone user agent it only offers to open the app), but
+ * Spotify's account pages are built for the phone's browser: the sign-in is shown as the device's own
+ * mobile Chrome, and once Spotify hands the session back to `open.spotify.com` the page switches to
+ * the desktop player identity again (Revera's 1.0.2 sign-in fix, still live at c0b705c).
+ *
+ * The user agent and the client hints are one identity and must agree: a reduced mobile Chrome user
+ * agent beside hints that name the same major version, `mobile=true`, Android and the device model.
+ * Desynchronising them is the documented "Oops! Something went wrong" / "This browser or app may not
+ * be secure" trap (`BrowserIdentity`'s header). Pinned by `BrowserIdentityTest`.
+ */
+data class MobileIdentity(
+    val userAgent: String,
+    val major: Int,
+    val fullVersion: String,
+    val platformVersion: String,
+    val model: String,
+) {
+    val brands: List<BrowserIdentity.Brand> get() = BrowserIdentity.brandsOf(major, fullVersion)
+
+    /** The `sec-ch-ua` header these brands make, as Chromium writes it. */
+    val secChUa: String get() = brands.joinToString(", ") { "\"${it.name}\";v=\"${it.major}\"" }
+
+    /** Everything [applyTo] puts on the settings, as one value the test can check against the user agent. */
+    val hints: Hints get() = Hints(
+        brands = brands,
+        fullVersion = fullVersion,
+        platform = "Android",
+        platformVersion = platformVersion,
+        architecture = "arm",
+        bitness = 64,
+        mobile = true,
+        model = model,
+    )
+
+    /** Puts this identity on the sign-in page's [settings]: the mobile user agent and agreeing hints. */
+    fun applyTo(settings: WebSettings) {
+        settings.userAgentString = userAgent
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) return
+        runCatching {
+            WebSettingsCompat.setUserAgentMetadata(settings, UserAgentMetadata.Builder()
+                .setBrandVersionList(brands.map {
+                    UserAgentMetadata.BrandVersion.Builder()
+                        .setBrand(it.name).setMajorVersion(it.major).setFullVersion(it.fullVersion).build()
+                })
+                .setFullVersion(fullVersion)
+                .setPlatform(hints.platform)
+                .setPlatformVersion(hints.platformVersion)
+                .setArchitecture(hints.architecture)
+                .setBitness(hints.bitness)
+                .setMobile(hints.mobile)
+                .setModel(hints.model)
+                .setWow64(false)
+                .build())
+        }.onFailure { Log.w(LOG, "mobile identity: client hints not set: $it") }
+    }
+
+    /** The client hints, whole. */
+    data class Hints(
+        val brands: List<BrowserIdentity.Brand>,
+        val fullVersion: String,
+        val platform: String,
+        val platformVersion: String,
+        val architecture: String,
+        val bitness: Int,
+        val mobile: Boolean,
+        val model: String,
+    )
+
+    companion object {
+        private const val LOG = "Valen"
+        private val CHROME = Regex("Chrome/([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)")
+
+        /**
+         * The identity behind a WebView's own default user agent (the phone's Chrome), with the two
+         * markers an embedded WebView adds taken off: `; wv` and ` Version/4.0`. The major the hints
+         * will name is read from that same user agent, so neither can drift from the other.
+         */
+        fun of(defaultUserAgent: String, platformVersion: String, model: String): MobileIdentity {
+            val ua = defaultUserAgent.replace("; wv", "").replace(" Version/4.0", "").trim()
+            val full = CHROME.find(ua)?.groupValues?.get(1) ?: BrowserIdentity.FALLBACK_ENGINE
+            val major = full.substringBefore('.').toIntOrNull()
+                ?: BrowserIdentity.FALLBACK_ENGINE.substringBefore('.').toInt()
+            return MobileIdentity(ua, major, full, platformVersion, model)
         }
     }
 }

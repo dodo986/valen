@@ -8,6 +8,7 @@ package app.valen.host.android
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -15,6 +16,7 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -32,6 +34,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * [BridgeHost] on an Android WebView that loads the official Spotify Web Player.
@@ -43,8 +46,12 @@ import kotlinx.coroutines.flow.StateFlow
  *   does never registers its playback device.
  * - [loginRequired] turns true on Spotify's login pages: the UI then shows [view] so the user signs
  *   in on Spotify's own page, and [loginLoad] says how that page is opening.
- * - Trimmed against Orpheon's host: no Connect relay, no native engine, no ad blocking, no account
- *   profiles, no media proxy. The page here is the player.
+ * - The sign-in page is the phone's own mobile Chrome ([MobileIdentity]); the player page is a
+ *   desktop Chrome ([BrowserIdentity]), switched back as soon as Spotify hands the page to the
+ *   player. Spotify patched in-app sign-ins, so the sign-in's e-mail-code requests leave from the
+ *   app instead of the WebView ([LoginTransport], Revera's fix at c0b705c).
+ * - Trimmed against Orpheon's host: no native engine, no ad blocking, no account profiles, no media
+ *   proxy. The page here is the player.
  */
 class WebPlayerHost(private val context: Context) : BridgeHost {
     private val appContext = context.applicationContext
@@ -141,6 +148,10 @@ class WebPlayerHost(private val context: Context) : BridgeHost {
         // Spotify Connect's commands leave from the app, without the WebView's X-Requested-With:
         // carrying it they are answered 200 and never delivered, and nothing plays (SpotifyRelay).
         SpotifyRelay(this) { identity.userAgent }.install()
+        // Spotify patched in-app sign-ins the same way: the sign-in page's e-mail-code requests are
+        // answered 200 and never delivered while the mark is on them. They leave from the app too
+        // (LoginTransport, Revera's fix at c0b705c); the page and its session cookies stay the WebView's.
+        LoginTransport(this) { cookies() }.install()
         webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 val allowed = request.resources.filter { it == PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID }
@@ -149,6 +160,15 @@ class WebPlayerHost(private val context: Context) : BridgeHost {
         }
         webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                // Spotify handed the sign-in back to the player: from here the page must speak as the
+                // player again (the desktop identity), or the Web Player refuses to run. Revera's
+                // sign-in fix: the sign-in page was the phone's mobile Chrome, the player is not.
+                if (mobileLoginBrowser && android.net.Uri.parse(url).host == PLAYER_HOST) {
+                    configurePlayerBrowser()
+                    view.stopLoading()
+                    view.loadUrl(PLAYER_URL)
+                    return
+                }
                 // The load watchdog's evidence that something started. It was never counted, so
                 // the watchdog reloaded the Web Player at about 4, 12, 24 and 40 s after every
                 // load, each time wiping the song just asked for back to the account's last one.
@@ -171,18 +191,57 @@ class WebPlayerHost(private val context: Context) : BridgeHost {
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 // ERR_ABORTED: a load this app stopped itself (a timeout, a newer load) — not a failure.
-                if (request.isForMainFrame && request.url.host == PLAYER_HOST && "ERR_ABORTED" !in error.description.toString())
+                val url = request.url.toString()
+                val aborted = "ERR_ABORTED" in error.description.toString()
+                if (request.isForMainFrame && request.url.host == PLAYER_HOST && !aborted)
                     playerPageFailed("load error ${error.errorCode}")
-                if (request.isForMainFrame && _loginLoad.value != LoginLoad.NONE && LoginLoad.isSpotifyAccounts(request.url.toString()) &&
-                    "ERR_ABORTED" !in error.description.toString())
+                if ((LoginLoad.isSpotifyAccounts(url) || (request.isForMainFrame && isLoginPage(url))) && !aborted)
+                    LoginDiagnostics.record("network", "err-${error.errorCode}")
+                if (request.isForMainFrame && _loginLoad.value != LoginLoad.NONE && LoginLoad.isSpotifyAccounts(url) && !aborted)
                     loginFailed("load error ${error.errorCode}")
             }
 
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                val url = request.url.toString()
                 if (request.isForMainFrame && request.url.host == PLAYER_HOST && (response.statusCode >= 500 || response.statusCode == 429))
                     playerPageFailed("http ${response.statusCode}")
-                if (request.isForMainFrame && _loginLoad.value != LoginLoad.NONE && LoginLoad.isSpotifyAccounts(request.url.toString()) && response.statusCode >= 500)
+                if (LoginLoad.isSpotifyAccounts(url) || (request.isForMainFrame && isLoginPage(url)))
+                    LoginDiagnostics.record("http", "${request.url.host} ${response.statusCode}")
+                if (request.isForMainFrame && _loginLoad.value != LoginLoad.NONE && LoginLoad.isSpotifyAccounts(url) && response.statusCode >= 500)
                     loginFailed("http ${response.statusCode}")
+            }
+
+            /**
+             * The sign-in page is on Spotify's account host, whose certificate failure is the
+             * sign-in's own. Only hosts and failure types are kept: never the failing address.
+             */
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                val url = error.url.orEmpty()
+                val signIn = _loginLoad.value != LoginLoad.NONE || isLoginPage(_url.value) || isLoginPage(url)
+                android.util.Log.w(LOG, "ssl error ${error.primaryError} on ${hostOf(url)}${if (signIn) " during a sign-in" else ""}")
+                if (signIn) {
+                    LoginDiagnostics.record("ssl", "primary-${error.primaryError}")
+                    if (url.isEmpty() || url == _url.value || LoginLoad.isSpotifyAccounts(url) || isLoginPage(url)) {
+                        handler.cancel()
+                        loginFailed("ssl error ${error.primaryError}")
+                        return
+                    }
+                }
+                handler.cancel()
+            }
+
+            /**
+             * The sign-in's trail: its own page's requests, by method, host and path only. Never the
+             * query (a flow id can ride there), never a header or a body, never a posted field: the
+             * e-mail address and the code the person types are never logged.
+             */
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                val url = request.url
+                if ("https".equals(url.scheme, true) && url.host == LoginTransport.ACCOUNTS_HOST) {
+                    val step = signInSteps.incrementAndGet()
+                    android.util.Log.i(LOG, "sign-in step #$step ${request.method} ${url.host}${url.path ?: "/"}")
+                }
+                return null
             }
 
             override fun onPageFinished(view: WebView, url: String) {
@@ -226,6 +285,34 @@ class WebPlayerHost(private val context: Context) : BridgeHost {
             }
         }
     }
+
+    /** The sign-in page presents the phone's own Chrome, not the player's desktop identity. */
+    private var mobileLoginBrowser = false
+
+    /** Sign-in requests seen on Spotify's account host: a count for the log, never a payload. */
+    private val signInSteps = AtomicInteger()
+
+    /** The player's identity (a desktop Chrome on Linux): what the Web Player needs to play on a phone. */
+    private fun configurePlayerBrowser() {
+        mobileLoginBrowser = false
+        identity.applyTo(view.settings)
+    }
+
+    /**
+     * The sign-in page's identity: the phone's own mobile Chrome, hints agreeing with it. Spotify
+     * builds its account pages for the phone's browser; the player's desktop identity is switched
+     * back in as soon as the page heads for open.spotify.com (see [onPageStarted]).
+     */
+    private fun configureLoginBrowser() {
+        mobileLoginBrowser = true
+        runCatching {
+            MobileIdentity.of(WebSettings.getDefaultUserAgent(context), android.os.Build.VERSION.RELEASE, android.os.Build.MODEL)
+        }.onFailure { android.util.Log.w(LOG, "sign-in: no mobile browser identity: $it") }
+            .getOrNull()?.applyTo(view.settings)
+    }
+
+    /** A host for the log, never an address: a sign-in failure must not carry a query or a code. */
+    private fun hostOf(url: String): String = runCatching { android.net.Uri.parse(url).host }.getOrNull() ?: "unknown host"
 
     /** The container the page is attached to, so a rebuilt page goes back to the same place. */
     private var container: ViewGroup? = null
@@ -387,6 +474,9 @@ class WebPlayerHost(private val context: Context) : BridgeHost {
 
     /** The sign-in page was asked for: kept out of sight, with its clocks running, until it has content. */
     private fun beginLoginLoad() {
+        configureLoginBrowser()
+        signInSteps.set(0)
+        LoginDiagnostics.record("opening")
         loginProbes = 0
         loginReloaded = false
         main.removeCallbacks(loginProbe)
@@ -406,9 +496,20 @@ class WebPlayerHost(private val context: Context) : BridgeHost {
     private fun loginFailed(what: String) {
         if (_loginLoad.value == LoginLoad.FAILED) return
         android.util.Log.w(LOG, "sign-in page failed ($what)")
+        LoginDiagnostics.record(stageOfSignInFailure(what), what)
+        android.util.Log.w(LOG, LoginDiagnostics.summary())
         runCatching { view.stopLoading() }
         view.alpha = 0f
         setLoginLoad(LoginLoad.FAILED)
+    }
+
+    /** The stage a sign-in's own failure belongs to: its type only, never the page's content. */
+    private fun stageOfSignInFailure(what: String): String = when {
+        what.startsWith("ssl") -> "ssl"
+        what.startsWith("http") -> "http"
+        what.startsWith("load error") -> "network"
+        what.startsWith("blank") -> "blank"
+        else -> "timeout"
     }
 
     private val loginTimeout = Runnable {
