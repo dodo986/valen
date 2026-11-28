@@ -11,15 +11,21 @@
 - [ ] An anime mascot.
 - [x] Search bar for the playlist import page.
 - [x] Fix some songs skipping.
-- [ ] A better lyrics API, or fix Lyperia drifting.
+- [x] A better lyrics API, or fix Lyperia drifting.
 - [ ] Better UI/UX and much cooler animations.
 - [ ] Ad blocker for Spotify (maybe with a Go daemon?).
 - [ ] Look for bugs in the backend.
 - [x] Discord RPC settings.
 - [x] Youtube playlist imports limited to 100 tracks.
-    
+- [x] soundcloud playlist import + search
+- [x] youtube album covers low res
+
+- [x] private mode
+- [x] dont cache long podcasts so that your disk doesnt shit itself or delete the cached songs
+
 - [x] Fix the algorithm throwing random slop into the queue.
-  - Near-rewrite
+      
+  - Near-rewrite of the algorithm
   - Known limits: a noisy related list can still name a genuinely unrelated real artist (now only
     one whose page returns songs and which is corroborated or top-ranked); the already-saved log
     keeps its old listening as "real" (a generated mix played before this change is not marked);
